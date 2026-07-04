@@ -8,17 +8,21 @@ dependencies = [
     "openai>=2.44.0",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
 tap-agent = "tap_agent.app:main"
+home-agents = "home_agents.app:main"
 
 [build-system]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["tap_agent*"]
+include = ["tap_agent*", "home_agents*"]
 exclude = ["data*"]
 
 [tool.uv]

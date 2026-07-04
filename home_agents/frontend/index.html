@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Home Agents</title>
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <h1>Home Agents</h1>
+  <span id="mode-badge" class="badge">connecting…</span>
+</header>
+
+<main class="layout">
+  <section class="panel chat-panel">
+    <h2>Orchestrator</h2>
+    <p class="hint">Describe what you want watched, e.g. "watch the kitchen tap and tell me if it runs unattended".</p>
+    <div id="chat-log" class="chat-log"></div>
+    <form id="chat-form" class="chat-form">
+      <input id="chat-input" type="text" placeholder="Type a message…" autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Tasks</h2>
+    <div id="task-grid" class="task-grid"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Data streams</h2>
+    <p class="hint">Open this page on a phone or laptop near the thing you want to watch, then share its camera or microphone as a named stream. Reference that stream id when you describe a task in the chat.</p>
+    <div class="stream-controls">
+      <input id="stream-id-input" type="text" value="phone-cam-1" />
+      <button id="camera-btn">Share camera</button>
+      <button id="mic-btn">Share microphone</button>
+      <span id="stream-status" class="hint"></span>
+    </div>
+    <video id="camera-preview" autoplay muted playsinline></video>
+    <div id="stream-list" class="stream-list"></div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

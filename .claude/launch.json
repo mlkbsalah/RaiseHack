@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "home-agents",
+      "runtimeExecutable": ".venv312/bin/python",
+      "runtimeArgs": ["-m", "home_agents.app"],
+      "port": 8077,
+      "env": {
+        "HOME_AGENTS_MOCK": "true",
+        "HOME_AGENTS_DATA_DIR": "home_agents_data_preview",
+        "HOME_AGENTS_PORT": "8077",
+        "HOME_AGENTS_TICK_SECONDS": "5"
+      }
+    }
+  ]
+}
