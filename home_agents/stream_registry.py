@@ -103,6 +103,13 @@ class StreamRegistry:
             age_seconds=max(0.0, time() - state.updated_at),
         )
 
+    def get_latest_bytes(self, stream_id: str) -> tuple[bytes, str] | None:
+        """Raw latest blob + mime for a stream, for serving into an <img>/<audio>."""
+        state = self._streams.get(stream_id)
+        if state is None:
+            return None
+        return state.data, state.mime_type
+
     def list_streams(self) -> list[dict]:
         return [
             {

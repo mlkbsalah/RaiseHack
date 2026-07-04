@@ -206,6 +206,11 @@ entire "launch" story:
   modality a stream doesn't provide). Opening this page on a phone and tapping
   "Start" is the live phone-camera path — no native app, just the browser's
   camera/mic permission prompt.
+  Below the cards, a **"Live view" gallery** shows the latest frame and clip
+  of *every* connected stream — whichever phone or script pushed it, not just
+  this device's own camera — by polling `/api/streams/pairs` and pointing an
+  `<img>`/`<audio>` at `/api/streams/<id>/latest`. Open the app on a wall
+  display and every phone in the house shows up as a live tile.
 
 ## Live camera walkthrough
 

@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -184,6 +184,17 @@ def list_streams() -> list[dict]:
 def list_stream_pairs() -> list[dict]:
     """Streams grouped into camera+voice pairs (one entry per place watched)."""
     return stream_registry.list_pairs()
+
+
+@app.get("/api/streams/{stream_id}/latest")
+def stream_latest(stream_id: str) -> Response:
+    """Latest frame/clip bytes for a stream, so the UI can show every ingested
+    stream (from any phone or script), not just this device's own camera."""
+    latest = stream_registry.get_latest_bytes(stream_id)
+    if latest is None:
+        raise HTTPException(404, "no data for stream")
+    data, mime_type = latest
+    return Response(content=data, media_type=mime_type, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/streams/{stream_id}/image")

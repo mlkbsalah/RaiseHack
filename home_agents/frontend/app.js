@@ -2,7 +2,7 @@ const chatLog = document.getElementById("chat-log");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const taskGrid = document.getElementById("task-grid");
-const streamList = document.getElementById("stream-list");
+const streamGallery = document.getElementById("stream-gallery");
 const streamCardsEl = document.getElementById("stream-cards");
 const newStreamNameInput = document.getElementById("new-stream-name");
 const addStreamBtn = document.getElementById("add-stream-btn");
@@ -132,19 +132,81 @@ async function refreshTasks() {
   renderTasks(views);
 }
 
+// The "Live view" gallery shows the latest frame + clip of EVERY connected
+// stream, whichever phone or script pushed it — not just this device's own
+// camera. Tiles are updated in place (keyed by stream name) so refreshing the
+// image doesn't interrupt audio that's mid-playback.
+
+const streamTiles = new Map(); // name -> { el, img, noCam, audio, meta }
+let pollTick = 0; // bumped each poll so image URLs bust the browser cache
+
+function createGalleryTile(name) {
+  const el = document.createElement("div");
+  el.className = "stream-tile";
+  el.innerHTML = `
+    <div class="stream-tile-media">
+      <img class="frame" alt="${name} camera" />
+      <div class="no-cam hint">no camera</div>
+    </div>
+    <audio class="clip" controls preload="none"></audio>
+    <div class="stream-tile-meta hint"></div>
+  `;
+  streamGallery.appendChild(el);
+  const tile = {
+    el,
+    img: el.querySelector(".frame"),
+    noCam: el.querySelector(".no-cam"),
+    audio: el.querySelector(".clip"),
+    meta: el.querySelector(".stream-tile-meta"),
+  };
+  streamTiles.set(name, tile);
+  return tile;
+}
+
+function updateGalleryTile(tile, p) {
+  if (p.camera) {
+    tile.img.src = `/api/streams/${p.camera.stream_id}/latest?t=${pollTick}`;
+    tile.img.style.display = "block";
+    tile.noCam.style.display = "none";
+  } else {
+    tile.img.removeAttribute("src");
+    tile.img.style.display = "none";
+    tile.noCam.style.display = "flex";
+  }
+  if (p.mic) {
+    tile.audio.style.display = "block";
+    // Only refresh the clip when it isn't playing, so we never cut off audio.
+    if (tile.audio.paused) tile.audio.src = `/api/streams/${p.mic.stream_id}/latest?t=${pollTick}`;
+  } else {
+    tile.audio.style.display = "none";
+    tile.audio.removeAttribute("src");
+  }
+  const cam = p.camera ? `📷 ${p.camera.age_seconds}s` : "📷 —";
+  const mic = p.mic ? `🎙 ${p.mic.age_seconds}s` : "🎙 —";
+  tile.meta.innerHTML = `<strong>${p.name}</strong> <small>(${p.source})</small> · ${cam} · ${mic}`;
+}
+
 async function refreshStreams() {
   const pairs = await api("/api/streams/pairs");
-  if (pairs.length === 0) {
-    streamList.innerHTML = '<span class="hint">No streams connected yet.</span>';
-    return;
+  pollTick += 1;
+  streamGallery.querySelector(".gallery-empty")?.remove();
+  const seen = new Set();
+  for (const p of pairs) {
+    seen.add(p.name);
+    updateGalleryTile(streamTiles.get(p.name) || createGalleryTile(p.name), p);
   }
-  streamList.innerHTML = pairs
-    .map((p) => {
-      const cam = p.camera ? `📷 ${p.camera.age_seconds}s` : "📷 —";
-      const mic = p.mic ? `🎙 ${p.mic.age_seconds}s` : "🎙 —";
-      return `<span class="stream-chip">${p.name} <small>(${p.source})</small> · ${cam} · ${mic}</span>`;
-    })
-    .join("");
+  for (const [name, tile] of streamTiles) {
+    if (!seen.has(name)) {
+      tile.el.remove();
+      streamTiles.delete(name);
+    }
+  }
+  if (streamTiles.size === 0 && !streamGallery.querySelector(".gallery-empty")) {
+    const empty = document.createElement("span");
+    empty.className = "gallery-empty hint";
+    empty.textContent = "No streams connected yet.";
+    streamGallery.appendChild(empty);
+  }
 }
 
 async function refreshStatus() {
