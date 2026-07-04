@@ -4,7 +4,6 @@ const chatInput = document.getElementById("chat-input");
 const taskGrid = document.getElementById("task-grid");
 const streamGallery = document.getElementById("stream-gallery");
 const streamCardsEl = document.getElementById("stream-cards");
-const newStreamNameInput = document.getElementById("new-stream-name");
 const addStreamBtn = document.getElementById("add-stream-btn");
 const modeBadge = document.getElementById("mode-badge");
 
@@ -405,8 +404,8 @@ function createStreamCard(defaultName) {
 }
 
 addStreamBtn.addEventListener("click", () => {
-  createStreamCard(newStreamNameInput.value.trim() || `stream-${streamSeq + 1}`);
-  newStreamNameInput.value = "";
+  // Name is set on the card itself; add it with a sensible default to edit.
+  createStreamCard(`stream-${streamSeq + 1}`);
 });
 
 createStreamCard("kitchen"); // seed one ready-to-go stream card
