@@ -91,9 +91,24 @@ class StreamRegistry:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / f"latest.{suffix}").write_bytes(data)
 
+    def _is_fresh(self, state: StreamState) -> bool:
+        """A live stream is 'connected' only while it keeps receiving data.
+
+        Demo/seeded streams are exempt (they are pushed once on purpose); a
+        live stream that has gone quiet past the TTL is treated as closed, so
+        stopped phones drop out instead of freezing on their last frame.
+        """
+        if state.source != "live":
+            return True
+        return (time() - state.updated_at) <= self._settings.stream_ttl_seconds
+
+    def remove(self, stream_id: str) -> bool:
+        """Drop a stream immediately (e.g. when a card is stopped in the UI)."""
+        return self._streams.pop(stream_id, None) is not None
+
     def get_payload(self, stream_id: str, kind: StreamKind) -> StreamPayload:
         state = self._streams.get(stream_id)
-        if state is None:
+        if state is None or not self._is_fresh(state):
             return StreamPayload(stream_id=stream_id, kind=kind, connected=False)
         return StreamPayload(
             stream_id=stream_id,
@@ -119,6 +134,7 @@ class StreamRegistry:
                 "age_seconds": round(time() - s.updated_at, 1),
             }
             for s in sorted(self._streams.values(), key=lambda s: s.stream_id)
+            if self._is_fresh(s)
         ]
 
     def list_pairs(self) -> list[dict]:
@@ -133,6 +149,8 @@ class StreamRegistry:
         now = time()
         groups: dict[str, dict] = {}
         for s in sorted(self._streams.values(), key=lambda s: s.stream_id):
+            if not self._is_fresh(s):
+                continue
             base = _base_name(s.stream_id)
             group = groups.setdefault(
                 base, {"name": base, "source": s.source, "camera": None, "mic": None}

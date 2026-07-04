@@ -25,6 +25,7 @@ class Settings:
     mock_mode: bool
     data_dir: Path
     tick_seconds: float
+    stream_ttl_seconds: float
     host: str
     port: int
 
@@ -50,6 +51,7 @@ def get_settings() -> Settings:
         mock_mode=_truthy(os.environ.get("HOME_AGENTS_MOCK")),
         data_dir=data_dir,
         tick_seconds=float(os.environ.get("HOME_AGENTS_TICK_SECONDS", "5")),
+        stream_ttl_seconds=float(os.environ.get("HOME_AGENTS_STREAM_TTL", "12")),
         host=os.environ.get("HOME_AGENTS_HOST", "127.0.0.1"),
         port=int(os.environ.get("HOME_AGENTS_PORT", "8000")),
     )

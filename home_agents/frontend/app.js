@@ -372,6 +372,8 @@ function createStreamCard(defaultName) {
   }
 
   function stop() {
+    const wasStreaming = running;
+    const name = baseName();
     running = false;
     clearInterval(frameTimer);
     if (recorder && recorder.state === "recording") recorder.stop();
@@ -386,6 +388,13 @@ function createStreamCard(defaultName) {
     micCheck.disabled = false;
     syncCamSelect();
     setStatus("idle");
+    if (wasStreaming) {
+      // Drop this stream from the server now so it leaves the live view
+      // immediately instead of freezing until the staleness TTL expires.
+      for (const suffix of ["-cam", "-mic"]) {
+        fetch(`/api/streams/${name}${suffix}`, { method: "DELETE" }).catch(() => {});
+      }
+    }
   }
 
   toggleBtn.addEventListener("click", () => (running ? stop() : start()));

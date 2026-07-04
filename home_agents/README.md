@@ -38,6 +38,8 @@ HOME_AGENTS_DATA_DIR=home_agents_data
 HOME_AGENTS_HOST=127.0.0.1
 HOME_AGENTS_PORT=8000
 HOME_AGENTS_TICK_SECONDS=5
+HOME_AGENTS_STREAM_TTL=12   # seconds a live stream may go quiet before it's
+                            # treated as closed and dropped from the live view
 ```
 
 `HOME_AGENTS_MOCK=true` runs the whole system — orchestrator, scheduler,
@@ -168,7 +170,12 @@ a browser posts a frame or clip to `/api/streams/{id}/image` or
 `/api/streams/{id}/audio` — there is no separate "register a stream" step.
 A task simply references a `stream_id`; if nothing has posted to it yet,
 the agent is told explicitly ("no data received yet for stream X") instead
-of guessing.
+of guessing. A live stream stays "connected" only while it keeps receiving
+data: once it goes quiet past `HOME_AGENTS_STREAM_TTL` it's treated as closed
+and disappears from the live view and the agent's inputs, so a stopped phone
+drops out instead of freezing on its last frame. Stopping a card in the UI
+also `DELETE`s its streams for immediate removal; demo/seeded streams are
+exempt from the TTL.
 
 ### 7. Approvals (`approvals.py`)
 

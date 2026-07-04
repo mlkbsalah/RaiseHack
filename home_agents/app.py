@@ -220,6 +220,12 @@ async def upload_audio(stream_id: str, file: UploadFile) -> dict:
     return {"stream_id": stream_id, "kind": "audio", "bytes": len(data)}
 
 
+@app.delete("/api/streams/{stream_id}")
+def delete_stream(stream_id: str) -> dict:
+    """Drop a stream now (a card was stopped); idempotent, so unknown ids are ok."""
+    return {"stream_id": stream_id, "removed": stream_registry.remove(stream_id)}
+
+
 # -------------------------------------------------------------- subjects
 
 
