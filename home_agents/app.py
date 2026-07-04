@@ -180,6 +180,12 @@ def list_streams() -> list[dict]:
     return stream_registry.list_streams()
 
 
+@app.get("/api/streams/pairs")
+def list_stream_pairs() -> list[dict]:
+    """Streams grouped into camera+voice pairs (one entry per place watched)."""
+    return stream_registry.list_pairs()
+
+
 @app.post("/api/streams/{stream_id}/image")
 def upload_image(stream_id: str, upload: ImageUpload) -> dict:
     try:

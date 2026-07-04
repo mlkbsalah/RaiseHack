@@ -30,7 +30,10 @@ _REPLY_SCHEMA = {
         "subject_id (an id from context.known_subjects, or null), "
         "subject_label (human name for a brand-new subject, or null), "
         "streams (array of {stream_id, kind: image|audio}, prefer ids from "
-        "context.known_streams), requires_approval (bool, default true)}"
+        "context.known_streams; each place in context.known_stream_pairs "
+        "exposes a camera '<name>-cam' (image) and a microphone '<name>-mic' "
+        "(audio) — include BOTH when a task should watch and listen to that "
+        "place), requires_approval (bool, default true)}"
     ),
     "target_task_id": (
         "null unless intent is update_task/pause_task/resume_task/delete_task, "
@@ -68,6 +71,7 @@ class Orchestrator:
                 for t in self.task_store.list()
             ],
             "known_streams": self.stream_registry.list_streams(),
+            "known_stream_pairs": self.stream_registry.list_pairs(),
             "known_subjects": self.memory_store.list_subjects(),
         }
 

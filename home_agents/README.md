@@ -192,24 +192,31 @@ entire "launch" story:
   inline **Approve / Deny** panel when there's a pending action proposal —
   the whole point of the "should the interface show when an agent needs
   approval" requirement.
-- **Streams panel** — lists connected streams and lets *this device* become
-  one: "Share camera" calls `getUserMedia`, grabs a JPEG frame off a canvas
-  every 4s, and posts it to `/api/streams/{id}/image`; "Share microphone"
-  records 4-second clips with `MediaRecorder` and posts them to
-  `/api/streams/{id}/audio`. Opening this page on a phone and tapping
-  "Share camera" is the live phone-camera path — no native app, just the
-  browser's camera permission prompt.
+- **Streams panel** — lets *this device* host one or more live streams,
+  where **each stream is a camera + microphone pair**. "Add camera + mic
+  stream" spawns a card; each card opens its own `getUserMedia` (camera +
+  mic together, with an optional camera picker so multiple cards can use
+  different physical cameras), grabs a JPEG frame off a canvas every 4s and
+  posts it to `/api/streams/<name>-cam/image`, and records back-to-back
+  4-second clips with `MediaRecorder` posted to
+  `/api/streams/<name>-mic/audio`. Many cards run at once, so one phone or
+  laptop can drive several camera+voice streams — the "Connected" list shows
+  them grouped back into pairs (📷 camera age · 🎙 mic age). Opening this page
+  on a phone and tapping "Start" is the live phone-camera path — no native
+  app, just the browser's camera/mic permission prompt.
 
 ## Live camera walkthrough
 
 1. Start the server, note the machine's LAN IP (e.g. `192.168.1.42`).
 2. On a phone on the same network, open `http://192.168.1.42:8000`.
-3. Tap "Share camera", grant permission, leave the tab open.
-4. In the chat (from any device), say something like: *"watch stream
-   phone-cam-1 and tell me if anyone is at the door"* — the orchestrator
-   will pick up `phone-cam-1` once it sees frames arriving, or you can name
-   it explicitly if you're on live mode where the LLM sees `known_streams`
-   in its context.
+3. Name a stream (e.g. `front-door`), tap "Start", grant camera + mic
+   permission, leave the tab open. Add more streams with "Add camera + mic
+   stream" — each is an independent camera+voice pair.
+4. In the chat (from any device), say something like: *"watch the front-door
+   stream and tell me if anyone is at the door"* — the orchestrator sees the
+   `front-door-cam` (image) and `front-door-mic` (audio) streams grouped as a
+   pair under `known_stream_pairs` and wires both into the task, so the agent
+   both sees and hears the door.
 
 ## Known limitations
 

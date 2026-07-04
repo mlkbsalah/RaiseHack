@@ -3,11 +3,9 @@ const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const taskGrid = document.getElementById("task-grid");
 const streamList = document.getElementById("stream-list");
-const streamStatus = document.getElementById("stream-status");
-const streamIdInput = document.getElementById("stream-id-input");
-const cameraBtn = document.getElementById("camera-btn");
-const micBtn = document.getElementById("mic-btn");
-const cameraPreview = document.getElementById("camera-preview");
+const streamCardsEl = document.getElementById("stream-cards");
+const newStreamNameInput = document.getElementById("new-stream-name");
+const addStreamBtn = document.getElementById("add-stream-btn");
 const modeBadge = document.getElementById("mode-badge");
 
 async function api(path, options) {
@@ -135,9 +133,17 @@ async function refreshTasks() {
 }
 
 async function refreshStreams() {
-  const streams = await api("/api/streams");
-  streamList.innerHTML = streams
-    .map((s) => `<span class="stream-chip">${s.stream_id} (${s.kind}, ${s.source}, ${s.age_seconds}s ago)</span>`)
+  const pairs = await api("/api/streams/pairs");
+  if (pairs.length === 0) {
+    streamList.innerHTML = '<span class="hint">No streams connected yet.</span>';
+    return;
+  }
+  streamList.innerHTML = pairs
+    .map((p) => {
+      const cam = p.camera ? `📷 ${p.camera.age_seconds}s` : "📷 —";
+      const mic = p.mic ? `🎙 ${p.mic.age_seconds}s` : "🎙 —";
+      return `<span class="stream-chip">${p.name} <small>(${p.source})</small> · ${cam} · ${mic}</span>`;
+    })
     .join("");
 }
 
@@ -146,85 +152,172 @@ async function refreshStatus() {
   modeBadge.textContent = status.mock_mode ? "mock mode" : "live mode";
 }
 
-// -------------------- live camera / microphone capture --------------------
+// ---------- multi-stream live capture: each stream = camera + voice ----------
+//
+// A stream card owns one browser MediaStream (camera + mic together). Every
+// few seconds it grabs a JPEG frame off the video track and posts it to
+// `<name>-cam`, and records a short audio clip off the mic track and posts it
+// to `<name>-mic`. Many cards can run at once — different cameras, different
+// places — which is what "multi-stream, each stream camera+voice" means here.
 
-let cameraStream = null;
-let cameraTimer = null;
+const FRAME_INTERVAL_MS = 4000;
+const CLIP_LENGTH_MS = 4000;
 
-cameraBtn.addEventListener("click", async () => {
-  if (cameraStream) {
-    cameraStream.getTracks().forEach((t) => t.stop());
-    clearInterval(cameraTimer);
-    cameraStream = null;
-    cameraPreview.style.display = "none";
-    cameraBtn.textContent = "Share camera";
-    return;
-  }
+let videoDevices = [];
+let streamSeq = 0;
+
+async function refreshVideoDevices() {
   try {
-    cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
-    cameraPreview.srcObject = cameraStream;
-    cameraPreview.style.display = "block";
-    cameraBtn.textContent = "Stop camera";
-    const canvas = document.createElement("canvas");
-    cameraTimer = setInterval(() => {
-      const streamId = streamIdInput.value.trim() || "phone-cam-1";
-      canvas.width = cameraPreview.videoWidth || 320;
-      canvas.height = cameraPreview.videoHeight || 240;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(cameraPreview, 0, 0, canvas.width, canvas.height);
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    videoDevices = devices.filter((d) => d.kind === "videoinput");
+  } catch {
+    videoDevices = [];
+  }
+  document.querySelectorAll("select.cam-select").forEach(fillCameraOptions);
+}
+
+function fillCameraOptions(select) {
+  const current = select.value;
+  select.innerHTML =
+    '<option value="">default camera</option>' +
+    videoDevices
+      .map((d, i) => `<option value="${d.deviceId}">${d.label || `camera ${i + 1}`}</option>`)
+      .join("");
+  if (current) select.value = current;
+}
+
+function createStreamCard(defaultName) {
+  const localId = ++streamSeq;
+  const card = document.createElement("div");
+  card.className = "stream-card";
+  card.innerHTML = `
+    <div class="stream-card-head">
+      <input class="name-input" type="text" value="${defaultName}" />
+      <select class="cam-select"></select>
+      <button class="toggle">Start</button>
+      <button class="remove" title="Remove stream">✕</button>
+    </div>
+    <video class="preview" autoplay muted playsinline></video>
+    <div class="stream-card-status hint">idle</div>
+  `;
+  streamCardsEl.appendChild(card);
+
+  const nameInput = card.querySelector(".name-input");
+  const camSelect = card.querySelector(".cam-select");
+  const toggleBtn = card.querySelector(".toggle");
+  const removeBtn = card.querySelector(".remove");
+  const preview = card.querySelector(".preview");
+  const statusEl = card.querySelector(".stream-card-status");
+  fillCameraOptions(camSelect);
+
+  const canvas = document.createElement("canvas");
+  let media = null;
+  let frameTimer = null;
+  let recorder = null;
+  let running = false;
+
+  const setStatus = (t) => (statusEl.textContent = t);
+  const baseName = () => nameInput.value.trim() || `stream-${localId}`;
+
+  async function start() {
+    const constraints = {
+      video: camSelect.value ? { deviceId: { exact: camSelect.value } } : true,
+      audio: true,
+    };
+    try {
+      media = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (err) {
+      setStatus(`error: ${err.message}`);
+      return;
+    }
+    preview.srcObject = media;
+    preview.style.display = "block";
+    running = true;
+    toggleBtn.textContent = "Stop";
+    toggleBtn.classList.add("primary");
+    nameInput.disabled = true;
+    camSelect.disabled = true;
+    setStatus("streaming camera + voice…");
+    refreshVideoDevices(); // device labels become available once permission is granted
+    startFrameLoop();
+    startClipLoop();
+  }
+
+  function startFrameLoop() {
+    frameTimer = setInterval(() => {
+      if (!running) return;
+      const w = preview.videoWidth || 320;
+      const h = preview.videoHeight || 240;
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext("2d").drawImage(preview, 0, 0, w, h);
       const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
-      api(`/api/streams/${streamId}/image`, {
+      api(`/api/streams/${baseName()}-cam/image`, {
         method: "POST",
         body: JSON.stringify({ data_url: dataUrl }),
-      })
-        .then(() => (streamStatus.textContent = `sent frame to ${streamId}`))
-        .catch((err) => (streamStatus.textContent = `error: ${err.message}`));
-    }, 4000);
-  } catch (err) {
-    streamStatus.textContent = `camera error: ${err.message}`;
+      }).catch((err) => setStatus(`camera error: ${err.message}`));
+    }, FRAME_INTERVAL_MS);
   }
+
+  function startClipLoop() {
+    const audioTracks = media ? media.getAudioTracks() : [];
+    if (audioTracks.length === 0) return;
+    const audioOnly = new MediaStream(audioTracks);
+    const recordClip = () => {
+      if (!running) return;
+      const chunks = [];
+      recorder = new MediaRecorder(audioOnly);
+      recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      recorder.onstop = async () => {
+        if (chunks.length) {
+          const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+          const form = new FormData();
+          form.append("file", blob, "clip.webm");
+          try {
+            await fetch(`/api/streams/${baseName()}-mic/audio`, { method: "POST", body: form });
+          } catch (err) {
+            setStatus(`mic error: ${err.message}`);
+          }
+        }
+        if (running) recordClip(); // keep recording back-to-back clips while live
+      };
+      recorder.start();
+      setTimeout(() => recorder && recorder.state === "recording" && recorder.stop(), CLIP_LENGTH_MS);
+    };
+    recordClip();
+  }
+
+  function stop() {
+    running = false;
+    clearInterval(frameTimer);
+    if (recorder && recorder.state === "recording") recorder.stop();
+    if (media) media.getTracks().forEach((t) => t.stop());
+    media = null;
+    preview.srcObject = null;
+    preview.style.display = "none";
+    toggleBtn.textContent = "Start";
+    toggleBtn.classList.remove("primary");
+    nameInput.disabled = false;
+    camSelect.disabled = false;
+    setStatus("idle");
+  }
+
+  toggleBtn.addEventListener("click", () => (running ? stop() : start()));
+  removeBtn.addEventListener("click", () => {
+    stop();
+    card.remove();
+  });
+}
+
+addStreamBtn.addEventListener("click", () => {
+  createStreamCard(newStreamNameInput.value.trim() || `stream-${streamSeq + 1}`);
+  newStreamNameInput.value = "";
 });
 
-let micStream = null;
-let micRecorder = null;
-
-micBtn.addEventListener("click", async () => {
-  if (micStream) {
-    micRecorder.stop();
-    micStream.getTracks().forEach((t) => t.stop());
-    micStream = null;
-    micBtn.textContent = "Share microphone";
-    return;
-  }
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    micBtn.textContent = "Stop microphone";
-    startMicClip();
-  } catch (err) {
-    streamStatus.textContent = `microphone error: ${err.message}`;
-  }
-});
-
-function startMicClip() {
-  if (!micStream) return;
-  const streamId = streamIdInput.value.trim() || "phone-cam-1";
-  const chunks = [];
-  micRecorder = new MediaRecorder(micStream);
-  micRecorder.ondataavailable = (e) => chunks.push(e.data);
-  micRecorder.onstop = async () => {
-    const blob = new Blob(chunks, { type: micRecorder.mimeType || "audio/webm" });
-    const form = new FormData();
-    form.append("file", blob, "clip.webm");
-    try {
-      await fetch(`/api/streams/${streamId}-mic/audio`, { method: "POST", body: form });
-      streamStatus.textContent = `sent clip to ${streamId}-mic`;
-    } catch (err) {
-      streamStatus.textContent = `error: ${err.message}`;
-    }
-    if (micStream) startMicClip(); // keep recording clips while sharing is on
-  };
-  micRecorder.start();
-  setTimeout(() => micRecorder.state === "recording" && micRecorder.stop(), 4000);
+createStreamCard("kitchen"); // seed one ready-to-go stream card
+refreshVideoDevices();
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener("devicechange", refreshVideoDevices);
 }
 
 refreshStatus();

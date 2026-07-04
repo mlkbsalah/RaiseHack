@@ -93,10 +93,21 @@ button.deny { background: var(--danger); border-color: var(--danger); color: whi
 .pill.paused { color: var(--warn); }
 
 .stream-controls { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
-.stream-controls input { padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); width: 160px; }
-#camera-preview { width: 220px; border-radius: 8px; border: 1px solid var(--border); display: none; margin-bottom: 10px; }
+.stream-controls input { padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); width: 200px; }
+
+.stream-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.stream-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--bg); }
+.stream-card-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.stream-card-head .name-input { flex: 1 1 90px; min-width: 90px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); }
+.stream-card-head .cam-select { flex: 1 1 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); }
+.stream-card-head .remove { padding: 6px 9px; }
+.stream-card .preview { width: 100%; border-radius: 6px; border: 1px solid var(--border); display: none; margin-bottom: 6px; background: #000; }
+.stream-card-status { font-size: 12px; }
+
+.streams-subhead { font-size: 13px; color: var(--text-dim); margin: 6px 0; font-weight: 600; }
 .stream-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .stream-chip { font-size: 12px; padding: 4px 8px; border-radius: 6px; background: var(--border); color: var(--text-dim); }
+.stream-chip small { opacity: 0.7; }
 
 @media (max-width: 800px) {
   .layout { grid-template-columns: 1fr; }

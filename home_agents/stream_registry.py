@@ -16,6 +16,18 @@ from .config import Settings
 from .llm_client import AUDIO_MIME_TYPES, IMAGE_MIME_TYPES, data_url_from_bytes
 from .models import StreamKind
 
+# Suffixes a live camera+voice stream card posts under, one per modality.
+CAMERA_SUFFIX = "-cam"
+MIC_SUFFIX = "-mic"
+
+
+def _base_name(stream_id: str) -> str:
+    """Strip a ``-cam``/``-mic`` modality suffix to recover the stream name."""
+    for suffix in (CAMERA_SUFFIX, MIC_SUFFIX):
+        if stream_id.endswith(suffix):
+            return stream_id[: -len(suffix)]
+    return stream_id
+
 
 @dataclass
 class StreamState:
@@ -101,6 +113,26 @@ class StreamRegistry:
             }
             for s in sorted(self._streams.values(), key=lambda s: s.stream_id)
         ]
+
+    def list_pairs(self) -> list[dict]:
+        """Group streams into camera+voice pairs by base name.
+
+        A live stream card posts its frames to ``<name>-cam`` and its audio
+        clips to ``<name>-mic``; grouping them back together here lets the UI
+        and the orchestrator treat one place (kitchen, front door) as a single
+        camera+voice stream instead of two unrelated blobs. A stream whose id
+        carries neither suffix stands alone as its own single-member pair.
+        """
+        now = time()
+        groups: dict[str, dict] = {}
+        for s in sorted(self._streams.values(), key=lambda s: s.stream_id):
+            base = _base_name(s.stream_id)
+            group = groups.setdefault(
+                base, {"name": base, "source": s.source, "camera": None, "mic": None}
+            )
+            member = {"stream_id": s.stream_id, "age_seconds": round(now - s.updated_at, 1)}
+            group["camera" if s.kind == "image" else "mic"] = member
+        return [groups[name] for name in sorted(groups)]
 
     def known_ids(self) -> list[str]:
         return sorted(self._streams.keys())
