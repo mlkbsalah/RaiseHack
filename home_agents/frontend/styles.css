@@ -99,8 +99,11 @@ button.deny { background: var(--danger); border-color: var(--danger); color: whi
 .stream-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--bg); }
 .stream-card-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
 .stream-card-head .name-input { flex: 1 1 90px; min-width: 90px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); }
-.stream-card-head .cam-select { flex: 1 1 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); }
 .stream-card-head .remove { padding: 6px 9px; }
+.stream-card-modes { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.stream-card-modes label { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-dim); cursor: pointer; }
+.stream-card-modes .cam-select { flex: 1 1 100%; margin-top: 2px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); }
+.stream-card-modes .cam-select:disabled { opacity: 0.5; }
 .stream-card .preview { width: 100%; border-radius: 6px; border: 1px solid var(--border); display: none; margin-bottom: 6px; background: #000; }
 .stream-card-status { font-size: 12px; }
 

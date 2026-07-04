@@ -193,17 +193,19 @@ entire "launch" story:
   the whole point of the "should the interface show when an agent needs
   approval" requirement.
 - **Streams panel** — lets *this device* host one or more live streams,
-  where **each stream is a camera + microphone pair**. "Add camera + mic
-  stream" spawns a card; each card opens its own `getUserMedia` (camera +
-  mic together, with an optional camera picker so multiple cards can use
-  different physical cameras), grabs a JPEG frame off a canvas every 4s and
-  posts it to `/api/streams/<name>-cam/image`, and records back-to-back
-  4-second clips with `MediaRecorder` posted to
+  where **each stream can be a camera, a microphone, or both** — the user
+  ticks Camera and/or Mic per card. "Add camera + mic stream" spawns a card;
+  on Start it opens a `getUserMedia` for exactly the modalities ticked (with
+  an optional camera picker so multiple cards can use different physical
+  cameras). When Camera is on it grabs a JPEG frame off a canvas every 4s and
+  posts it to `/api/streams/<name>-cam/image`; when Mic is on it records
+  back-to-back 4-second clips with `MediaRecorder` posted to
   `/api/streams/<name>-mic/audio`. Many cards run at once, so one phone or
-  laptop can drive several camera+voice streams — the "Connected" list shows
-  them grouped back into pairs (📷 camera age · 🎙 mic age). Opening this page
-  on a phone and tapping "Start" is the live phone-camera path — no native
-  app, just the browser's camera/mic permission prompt.
+  laptop can drive several streams — the "Connected" list shows them grouped
+  by name into camera+mic pairs (📷 camera age · 🎙 mic age, with `—` for a
+  modality a stream doesn't provide). Opening this page on a phone and tapping
+  "Start" is the live phone-camera path — no native app, just the browser's
+  camera/mic permission prompt.
 
 ## Live camera walkthrough
 

@@ -193,9 +193,13 @@ function createStreamCard(defaultName) {
   card.innerHTML = `
     <div class="stream-card-head">
       <input class="name-input" type="text" value="${defaultName}" />
-      <select class="cam-select"></select>
       <button class="toggle">Start</button>
       <button class="remove" title="Remove stream">✕</button>
+    </div>
+    <div class="stream-card-modes">
+      <label><input type="checkbox" class="use-cam" checked /> Camera</label>
+      <label><input type="checkbox" class="use-mic" checked /> Mic</label>
+      <select class="cam-select"></select>
     </div>
     <video class="preview" autoplay muted playsinline></video>
     <div class="stream-card-status hint">idle</div>
@@ -204,11 +208,18 @@ function createStreamCard(defaultName) {
 
   const nameInput = card.querySelector(".name-input");
   const camSelect = card.querySelector(".cam-select");
+  const camCheck = card.querySelector(".use-cam");
+  const micCheck = card.querySelector(".use-mic");
   const toggleBtn = card.querySelector(".toggle");
   const removeBtn = card.querySelector(".remove");
   const preview = card.querySelector(".preview");
   const statusEl = card.querySelector(".stream-card-status");
   fillCameraOptions(camSelect);
+
+  // The camera picker only matters when this stream includes a camera.
+  const syncCamSelect = () => (camSelect.disabled = !camCheck.checked);
+  camCheck.addEventListener("change", syncCamSelect);
+  syncCamSelect();
 
   const canvas = document.createElement("canvas");
   let media = null;
@@ -220,27 +231,38 @@ function createStreamCard(defaultName) {
   const baseName = () => nameInput.value.trim() || `stream-${localId}`;
 
   async function start() {
-    const constraints = {
-      video: camSelect.value ? { deviceId: { exact: camSelect.value } } : true,
-      audio: true,
-    };
+    const useCam = camCheck.checked;
+    const useMic = micCheck.checked;
+    if (!useCam && !useMic) {
+      setStatus("pick camera, mic, or both first");
+      return;
+    }
+    const constraints = {};
+    if (useCam) constraints.video = camSelect.value ? { deviceId: { exact: camSelect.value } } : true;
+    if (useMic) constraints.audio = true;
     try {
       media = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (err) {
       setStatus(`error: ${err.message}`);
       return;
     }
-    preview.srcObject = media;
-    preview.style.display = "block";
     running = true;
     toggleBtn.textContent = "Stop";
     toggleBtn.classList.add("primary");
     nameInput.disabled = true;
     camSelect.disabled = true;
-    setStatus("streaming camera + voice…");
+    camCheck.disabled = true;
+    micCheck.disabled = true;
     refreshVideoDevices(); // device labels become available once permission is granted
-    startFrameLoop();
-    startClipLoop();
+    if (useCam) {
+      preview.srcObject = media;
+      preview.style.display = "block";
+      startFrameLoop();
+    }
+    if (useMic) startClipLoop();
+    setStatus(
+      useCam && useMic ? "streaming camera + voice…" : useCam ? "streaming camera…" : "streaming voice…"
+    );
   }
 
   function startFrameLoop() {
@@ -298,7 +320,9 @@ function createStreamCard(defaultName) {
     toggleBtn.textContent = "Start";
     toggleBtn.classList.remove("primary");
     nameInput.disabled = false;
-    camSelect.disabled = false;
+    camCheck.disabled = false;
+    micCheck.disabled = false;
+    syncCamSelect();
     setStatus("idle");
   }
 
