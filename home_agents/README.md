@@ -52,10 +52,12 @@ observations instead. This is the fastest way to see the full loop.
 HOME_AGENTS_MOCK=true python -m home_agents.app
 ```
 
-Then open **http://127.0.0.1:8000** in a browser — on the same machine, or
-on a phone on the same network using the machine's LAN IP instead of
-`127.0.0.1`, which is how you connect a phone camera as a live stream (see
-below). For a real deployment, unset mock mode and export `CRUSOE_API_KEY`.
+Then open **http://127.0.0.1:8000** in a browser on the same machine. To
+connect a phone camera/mic as a live stream, expose the server over HTTPS with
+a Cloudflare tunnel — phone browsers only allow camera/mic capture on a secure
+origin, so see [Connecting phones (Cloudflare
+tunnel)](#connecting-phones-cloudflare-tunnel) below. For a real deployment,
+unset mock mode and export `CRUSOE_API_KEY`.
 
 ## Architecture
 
@@ -220,18 +222,65 @@ entire "launch" story:
   `<img>`/`<audio>` at `/api/streams/<id>/latest`. Open the app on a wall
   display and every phone in the house shows up as a live tile.
 
-## Live camera walkthrough
+## Connecting phones (Cloudflare tunnel)
 
-1. Start the server, note the machine's LAN IP (e.g. `192.168.1.42`).
-2. On a phone on the same network, open `http://192.168.1.42:8000`.
-3. Name a stream (e.g. `front-door`), tap "Start", grant camera + mic
-   permission, leave the tab open. Add more streams with "Add camera + mic
-   stream" — each is an independent camera+voice pair.
-4. In the chat (from any device), say something like: *"watch the front-door
+Phone browsers only grant camera/mic access on a **secure origin** — `https://`
+or `localhost`. Serving the app over plain HTTP to a LAN IP does *not* work:
+the browser silently blocks `getUserMedia`. The simplest way to give the app a
+public HTTPS URL for a demo is a **Cloudflare tunnel** pointed at your
+locally-running server — no deploy, no account, and the phones don't even need
+to be on the same Wi-Fi.
+
+### 1. Install the `cloudflared` CLI
+
+```bash
+brew install cloudflared                          # macOS (Homebrew)
+winget install --id Cloudflare.cloudflared        # Windows
+sudo apt-get install cloudflared                  # Debian/Ubuntu (or grab the .deb below)
+```
+
+Other platforms / binaries:
+<https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/>
+
+### 2. Start the app
+
+```bash
+CRUSOE_API_KEY=... python -m home_agents.app      # binding 127.0.0.1:8000 is fine
+```
+
+Run in **live mode** (`CRUSOE_API_KEY` set, `HOME_AGENTS_MOCK` unset) so the
+orchestrator can wire your arbitrary stream names into tasks; mock mode only
+keyword-matches the built-in demo scenarios.
+
+### 3. Open a tunnel to it
+
+In a second terminal:
+
+```bash
+cloudflared tunnel --url http://localhost:8000
+```
+
+It prints a public HTTPS URL like `https://random-words.trycloudflare.com`.
+This "quick tunnel" needs no Cloudflare account; the URL is ephemeral and
+changes each run.
+
+### 4. Connect the phones
+
+1. Open the printed `https://…trycloudflare.com` URL on each phone. Making a QR
+   code of it is the fastest way to get several phones onto the page.
+2. On each phone, give the stream a **unique name** (e.g. `kitchen`,
+   `front-door`) — streams are keyed by name on the server, so two phones
+   sharing a name overwrite each other. Tick Camera and/or Mic, tap **Start**,
+   and grant the camera/mic permission prompt.
+3. Every phone now appears as a live tile in the **Live view** gallery, and you
+   can wire any of them into a task from the chat: *"watch the front-door
    stream and tell me if anyone is at the door"* — the orchestrator sees the
    `front-door-cam` (image) and `front-door-mic` (audio) streams grouped as a
-   pair under `known_stream_pairs` and wires both into the task, so the agent
-   both sees and hears the door.
+   pair under `known_stream_pairs` and wires both in, so the agent both sees and
+   hears the door.
+
+Prefer a stable URL (persistent tunnel or a real deploy)? Any HTTPS host works
+— the tunnel above is just the quickest path for a live demo.
 
 ## Known limitations
 
