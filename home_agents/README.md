@@ -38,6 +38,8 @@ HOME_AGENTS_DATA_DIR=home_agents_data
 HOME_AGENTS_HOST=127.0.0.1
 HOME_AGENTS_PORT=8000
 HOME_AGENTS_TICK_SECONDS=5
+HOME_AGENTS_STREAM_TTL=12   # seconds a live stream may go quiet before it's
+                            # treated as closed and dropped from the live view
 ```
 
 `HOME_AGENTS_MOCK=true` runs the whole system — orchestrator, scheduler,
@@ -160,14 +162,20 @@ entry," so a database would add ceremony without adding capability.
 ### 6. Streams (`stream_registry.py`)
 
 A stream is just a named latest-blob: `stream_id → (kind, mime type, bytes,
-timestamp, source)`. Two demo streams (`demo-kitchen-cam`,
+timestamp, source)`. In **mock mode** two demo streams (`demo-kitchen-cam`,
 `demo-kitchen-mic`) are seeded at startup from `data/running-tap-*` so the
-tap scenario works with zero hardware. Live streams are created the moment
+tap scenario works with zero hardware; **live mode seeds nothing** — real
+devices push their own streams. Live streams are created the moment
 a browser posts a frame or clip to `/api/streams/{id}/image` or
 `/api/streams/{id}/audio` — there is no separate "register a stream" step.
 A task simply references a `stream_id`; if nothing has posted to it yet,
 the agent is told explicitly ("no data received yet for stream X") instead
-of guessing.
+of guessing. A live stream stays "connected" only while it keeps receiving
+data: once it goes quiet past `HOME_AGENTS_STREAM_TTL` it's treated as closed
+and disappears from the live view and the agent's inputs, so a stopped phone
+drops out instead of freezing on its last frame. Stopping a card in the UI
+also `DELETE`s its streams for immediate removal; demo/seeded streams are
+exempt from the TTL.
 
 ### 7. Approvals (`approvals.py`)
 
@@ -192,24 +200,38 @@ entire "launch" story:
   inline **Approve / Deny** panel when there's a pending action proposal —
   the whole point of the "should the interface show when an agent needs
   approval" requirement.
-- **Streams panel** — lists connected streams and lets *this device* become
-  one: "Share camera" calls `getUserMedia`, grabs a JPEG frame off a canvas
-  every 4s, and posts it to `/api/streams/{id}/image`; "Share microphone"
-  records 4-second clips with `MediaRecorder` and posts them to
-  `/api/streams/{id}/audio`. Opening this page on a phone and tapping
-  "Share camera" is the live phone-camera path — no native app, just the
-  browser's camera permission prompt.
+- **Streams panel** — lets *this device* host one or more live streams,
+  where **each stream can be a camera, a microphone, or both** — the user
+  ticks Camera and/or Mic per card. "Add camera + mic stream" spawns a card;
+  on Start it opens a `getUserMedia` for exactly the modalities ticked (with
+  an optional camera picker so multiple cards can use different physical
+  cameras). When Camera is on it grabs a JPEG frame off a canvas every 4s and
+  posts it to `/api/streams/<name>-cam/image`; when Mic is on it records
+  back-to-back 4-second clips with `MediaRecorder` posted to
+  `/api/streams/<name>-mic/audio`. Many cards run at once, so one phone or
+  laptop can drive several streams — the "Connected" list shows them grouped
+  by name into camera+mic pairs (📷 camera age · 🎙 mic age, with `—` for a
+  modality a stream doesn't provide). Opening this page on a phone and tapping
+  "Start" is the live phone-camera path — no native app, just the browser's
+  camera/mic permission prompt.
+  Below the cards, a **"Live view" gallery** shows the latest frame and clip
+  of *every* connected stream — whichever phone or script pushed it, not just
+  this device's own camera — by polling `/api/streams/pairs` and pointing an
+  `<img>`/`<audio>` at `/api/streams/<id>/latest`. Open the app on a wall
+  display and every phone in the house shows up as a live tile.
 
 ## Live camera walkthrough
 
 1. Start the server, note the machine's LAN IP (e.g. `192.168.1.42`).
 2. On a phone on the same network, open `http://192.168.1.42:8000`.
-3. Tap "Share camera", grant permission, leave the tab open.
-4. In the chat (from any device), say something like: *"watch stream
-   phone-cam-1 and tell me if anyone is at the door"* — the orchestrator
-   will pick up `phone-cam-1` once it sees frames arriving, or you can name
-   it explicitly if you're on live mode where the LLM sees `known_streams`
-   in its context.
+3. Name a stream (e.g. `front-door`), tap "Start", grant camera + mic
+   permission, leave the tab open. Add more streams with "Add camera + mic
+   stream" — each is an independent camera+voice pair.
+4. In the chat (from any device), say something like: *"watch the front-door
+   stream and tell me if anyone is at the door"* — the orchestrator sees the
+   `front-door-cam` (image) and `front-door-mic` (audio) streams grouped as a
+   pair under `known_stream_pairs` and wires both into the task, so the agent
+   both sees and hears the door.
 
 ## Known limitations
 

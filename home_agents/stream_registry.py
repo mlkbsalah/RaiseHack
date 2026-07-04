@@ -16,6 +16,18 @@ from .config import Settings
 from .llm_client import AUDIO_MIME_TYPES, IMAGE_MIME_TYPES, data_url_from_bytes
 from .models import StreamKind
 
+# Suffixes a live camera+voice stream card posts under, one per modality.
+CAMERA_SUFFIX = "-cam"
+MIC_SUFFIX = "-mic"
+
+
+def _base_name(stream_id: str) -> str:
+    """Strip a ``-cam``/``-mic`` modality suffix to recover the stream name."""
+    for suffix in (CAMERA_SUFFIX, MIC_SUFFIX):
+        if stream_id.endswith(suffix):
+            return stream_id[: -len(suffix)]
+    return stream_id
+
 
 @dataclass
 class StreamState:
@@ -79,9 +91,24 @@ class StreamRegistry:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / f"latest.{suffix}").write_bytes(data)
 
+    def _is_fresh(self, state: StreamState) -> bool:
+        """A live stream is 'connected' only while it keeps receiving data.
+
+        Demo/seeded streams are exempt (they are pushed once on purpose); a
+        live stream that has gone quiet past the TTL is treated as closed, so
+        stopped phones drop out instead of freezing on their last frame.
+        """
+        if state.source != "live":
+            return True
+        return (time() - state.updated_at) <= self._settings.stream_ttl_seconds
+
+    def remove(self, stream_id: str) -> bool:
+        """Drop a stream immediately (e.g. when a card is stopped in the UI)."""
+        return self._streams.pop(stream_id, None) is not None
+
     def get_payload(self, stream_id: str, kind: StreamKind) -> StreamPayload:
         state = self._streams.get(stream_id)
-        if state is None:
+        if state is None or not self._is_fresh(state):
             return StreamPayload(stream_id=stream_id, kind=kind, connected=False)
         return StreamPayload(
             stream_id=stream_id,
@@ -90,6 +117,13 @@ class StreamRegistry:
             data_url=data_url_from_bytes(state.data, state.mime_type),
             age_seconds=max(0.0, time() - state.updated_at),
         )
+
+    def get_latest_bytes(self, stream_id: str) -> tuple[bytes, str] | None:
+        """Raw latest blob + mime for a stream, for serving into an <img>/<audio>."""
+        state = self._streams.get(stream_id)
+        if state is None:
+            return None
+        return state.data, state.mime_type
 
     def list_streams(self) -> list[dict]:
         return [
@@ -100,7 +134,30 @@ class StreamRegistry:
                 "age_seconds": round(time() - s.updated_at, 1),
             }
             for s in sorted(self._streams.values(), key=lambda s: s.stream_id)
+            if self._is_fresh(s)
         ]
+
+    def list_pairs(self) -> list[dict]:
+        """Group streams into camera+voice pairs by base name.
+
+        A live stream card posts its frames to ``<name>-cam`` and its audio
+        clips to ``<name>-mic``; grouping them back together here lets the UI
+        and the orchestrator treat one place (kitchen, front door) as a single
+        camera+voice stream instead of two unrelated blobs. A stream whose id
+        carries neither suffix stands alone as its own single-member pair.
+        """
+        now = time()
+        groups: dict[str, dict] = {}
+        for s in sorted(self._streams.values(), key=lambda s: s.stream_id):
+            if not self._is_fresh(s):
+                continue
+            base = _base_name(s.stream_id)
+            group = groups.setdefault(
+                base, {"name": base, "source": s.source, "camera": None, "mic": None}
+            )
+            member = {"stream_id": s.stream_id, "age_seconds": round(now - s.updated_at, 1)}
+            group["camera" if s.kind == "image" else "mic"] = member
+        return [groups[name] for name in sorted(groups)]
 
     def known_ids(self) -> list[str]:
         return sorted(self._streams.keys())

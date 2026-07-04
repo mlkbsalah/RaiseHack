@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -37,7 +37,10 @@ llm = LLMClient(settings)
 task_store = TaskStore(settings)
 memory_store = MemoryStore(settings)
 stream_registry = StreamRegistry(settings)
-stream_registry.seed_demo_streams(REPO_ROOT / "data")
+if settings.mock_mode:
+    # Demo streams exist so the tap scenario works with zero hardware; in live
+    # mode real devices push their own streams, so don't seed fake ones.
+    stream_registry.seed_demo_streams(REPO_ROOT / "data")
 approval_store = ApprovalStore()
 orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store)
 task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store)
@@ -180,6 +183,23 @@ def list_streams() -> list[dict]:
     return stream_registry.list_streams()
 
 
+@app.get("/api/streams/pairs")
+def list_stream_pairs() -> list[dict]:
+    """Streams grouped into camera+voice pairs (one entry per place watched)."""
+    return stream_registry.list_pairs()
+
+
+@app.get("/api/streams/{stream_id}/latest")
+def stream_latest(stream_id: str) -> Response:
+    """Latest frame/clip bytes for a stream, so the UI can show every ingested
+    stream (from any phone or script), not just this device's own camera."""
+    latest = stream_registry.get_latest_bytes(stream_id)
+    if latest is None:
+        raise HTTPException(404, "no data for stream")
+    data, mime_type = latest
+    return Response(content=data, media_type=mime_type, headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/streams/{stream_id}/image")
 def upload_image(stream_id: str, upload: ImageUpload) -> dict:
     try:
@@ -198,6 +218,12 @@ async def upload_audio(stream_id: str, file: UploadFile) -> dict:
     mime_type = file.content_type or "audio/webm"
     stream_registry.put(stream_id, "audio", mime_type, data)
     return {"stream_id": stream_id, "kind": "audio", "bytes": len(data)}
+
+
+@app.delete("/api/streams/{stream_id}")
+def delete_stream(stream_id: str) -> dict:
+    """Drop a stream now (a card was stopped); idempotent, so unknown ids are ok."""
+    return {"stream_id": stream_id, "removed": stream_registry.remove(stream_id)}
 
 
 # -------------------------------------------------------------- subjects
