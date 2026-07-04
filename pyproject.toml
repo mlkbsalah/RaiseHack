@@ -1,0 +1,25 @@
+[project]
+name = "tap-agent"
+version = "0.1.0"
+description = "Deterministic manager-specialist smart-home tap incident prototype."
+readme = "tap_agent/README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=2.44.0",
+    "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
+]
+
+[project.scripts]
+tap-agent = "tap_agent.app:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["tap_agent*"]
+exclude = ["data*"]
+
+[tool.uv]
+package = true

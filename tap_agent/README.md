@@ -5,7 +5,14 @@ Minimal manager-specialist prototype for detecting a kitchen tap left running.
 ## Setup
 
 ```bash
-cd tap_agent
+cd /path/to/repo
+uv sync
+```
+
+Or with plain `pip`:
+
+```bash
+cd /path/to/repo/tap_agent
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -56,6 +63,16 @@ From the repository root:
 
 ```bash
 TAP_AGENT_MOCK=true python tap_agent/app.py \
+  --image examples/kitchen.jpg \
+  --audio examples/kitchen.wav \
+  --flow-rate 4.2 \
+  --elapsed-seconds 45
+```
+
+With uv:
+
+```bash
+TAP_AGENT_MOCK=true uv run tap-agent \
   --image examples/kitchen.jpg \
   --audio examples/kitchen.wav \
   --flow-rate 4.2 \
