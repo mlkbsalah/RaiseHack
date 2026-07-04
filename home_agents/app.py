@@ -37,7 +37,10 @@ llm = LLMClient(settings)
 task_store = TaskStore(settings)
 memory_store = MemoryStore(settings)
 stream_registry = StreamRegistry(settings)
-stream_registry.seed_demo_streams(REPO_ROOT / "data")
+if settings.mock_mode:
+    # Demo streams exist so the tap scenario works with zero hardware; in live
+    # mode real devices push their own streams, so don't seed fake ones.
+    stream_registry.seed_demo_streams(REPO_ROOT / "data")
 approval_store = ApprovalStore()
 orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store)
 task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store)

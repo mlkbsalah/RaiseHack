@@ -160,9 +160,10 @@ entry," so a database would add ceremony without adding capability.
 ### 6. Streams (`stream_registry.py`)
 
 A stream is just a named latest-blob: `stream_id → (kind, mime type, bytes,
-timestamp, source)`. Two demo streams (`demo-kitchen-cam`,
+timestamp, source)`. In **mock mode** two demo streams (`demo-kitchen-cam`,
 `demo-kitchen-mic`) are seeded at startup from `data/running-tap-*` so the
-tap scenario works with zero hardware. Live streams are created the moment
+tap scenario works with zero hardware; **live mode seeds nothing** — real
+devices push their own streams. Live streams are created the moment
 a browser posts a frame or clip to `/api/streams/{id}/image` or
 `/api/streams/{id}/audio` — there is no separate "register a stream" step.
 A task simply references a `stream_id`; if nothing has posted to it yet,
