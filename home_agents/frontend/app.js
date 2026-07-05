@@ -6,6 +6,8 @@ const streamGallery = document.getElementById("stream-gallery");
 const streamCardsEl = document.getElementById("stream-cards");
 const addStreamBtn = document.getElementById("add-stream-btn");
 const modeBadge = document.getElementById("mode-badge");
+const googleStatusEl = document.getElementById("google-status");
+const googleConnectBtn = document.getElementById("google-connect-btn");
 
 async function api(path, options) {
   const res = await fetch(path, {
@@ -87,11 +89,21 @@ function renderTasks(views) {
       html += `<div class="summary hint">Waiting for the first scheduled run…</div>`;
     }
     if (approval) {
+      const actionType = approval.action_type || "manual review";
+      const payload = approval.action_payload && Object.keys(approval.action_payload).length
+        ? `<pre>${escapeHtml(JSON.stringify(approval.action_payload, null, 2))}</pre>`
+        : "";
+      const execution = approval.execution_result
+        ? `<br/>Execution: ${escapeHtml(approval.execution_status)} — ${escapeHtml(approval.execution_result)}`
+        : `<br/>Execution: ${escapeHtml(approval.execution_status)}`;
       html += `
         <div class="approval-box">
           <strong>Needs your approval</strong><br/>
           Action: ${escapeHtml(approval.action)}<br/>
+          Type: ${escapeHtml(actionType)}<br/>
           Reason: ${escapeHtml(approval.reason)} (${escapeHtml(approval.risk)} risk)
+          ${payload}
+          <span class="hint">${execution}</span>
           <div class="row" style="margin-top:6px;">
             <button class="approve" data-approve="${approval.approval_id}">Approve</button>
             <button class="deny" data-deny="${approval.approval_id}">Deny</button>
@@ -212,11 +224,15 @@ async function saveTaskEdit(event, form) {
 }
 
 async function decide(approvalId, approve) {
-  await api(`/api/approvals/${approvalId}/decision`, {
-    method: "POST",
-    body: JSON.stringify({ approve }),
-  });
-  refreshTasks();
+  try {
+    await api(`/api/approvals/${approvalId}/decision`, {
+      method: "POST",
+      body: JSON.stringify({ approve }),
+    });
+  } catch (err) {
+    addMessage("assistant", `Approval error: ${err.message}`);
+  }
+  await refreshTasks();
 }
 
 async function refreshTasks() {
@@ -305,6 +321,29 @@ async function refreshStatus() {
   const status = await api("/api/status");
   modeBadge.textContent = status.mock_mode ? "mock mode" : "live mode";
 }
+
+async function refreshGoogleStatus() {
+  const status = await api("/api/google/status");
+  if (!status.configured) {
+    googleStatusEl.textContent =
+      "Not configured. Set GOOGLE_OAUTH_CLIENT_SECRETS to a Google OAuth client JSON file.";
+    googleConnectBtn.disabled = true;
+    return;
+  }
+  googleConnectBtn.disabled = false;
+  googleStatusEl.textContent = status.connected
+    ? "Google connected. Approved structured actions can execute."
+    : "Google configured, not connected yet.";
+}
+
+googleConnectBtn.addEventListener("click", async () => {
+  try {
+    const { auth_url } = await api("/api/google/auth/start");
+    window.location.href = auth_url;
+  } catch (err) {
+    addMessage("assistant", `Google auth error: ${err.message}`);
+  }
+});
 
 // ---------- multi-stream live capture: each stream = camera + voice ----------
 //
@@ -508,6 +547,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
 }
 
 refreshStatus();
+refreshGoogleStatus();
 refreshTasks();
 refreshStreams();
 setInterval(refreshTasks, 4000);

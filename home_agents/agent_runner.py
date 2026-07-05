@@ -35,7 +35,13 @@ _OBSERVATION_SCHEMA = {
     ),
     "action_proposal": (
         "null unless a resident-facing action should be taken, else an "
-        "object {action, reason, risk: low|medium|high}"
+        "object {action, reason, risk: low|medium|high, action_type, action_payload}. "
+        "action_type may be null or one of send_email, create_calendar_event, "
+        "create_task, create_keep_note. Only include action_type when all required "
+        "payload fields are known from the task or memory. send_email requires "
+        "{to, subject, body}; create_calendar_event requires {summary, start, end, "
+        "timezone, attendees, create_meet}; create_task requires {title, notes, due}; "
+        "create_keep_note requires {title, text}."
     ),
     "confidence": "number from 0.0 to 1.0",
 }
@@ -177,6 +183,11 @@ class TaskAgent:
                     action=f"Notify resident about: {task.focus}",
                     reason="Sustained anomaly across mock observation ticks.",
                     risk="medium",
+                    action_type="create_task",
+                    action_payload={
+                        "title": f"Check on {task.title}",
+                        "notes": f"Mock anomaly detected: {task.focus}",
+                    },
                 ),
                 confidence=0.8,
             )

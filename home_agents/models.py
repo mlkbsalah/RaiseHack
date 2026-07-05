@@ -10,6 +10,12 @@ from pydantic import BaseModel, Field
 
 
 StreamKind = Literal["image", "audio"]
+GoogleActionType = Literal[
+    "send_email",
+    "create_calendar_event",
+    "create_task",
+    "create_keep_note",
+]
 Intent = Literal[
     "create_task",
     "update_task",
@@ -97,6 +103,8 @@ class ActionProposal(SerializableModel):
     action: str
     reason: str
     risk: Risk
+    action_type: GoogleActionType | None = None
+    action_payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentObservation(SerializableModel):
@@ -115,7 +123,11 @@ class ApprovalRequest(SerializableModel):
     action: str
     reason: str
     risk: Risk
+    action_type: GoogleActionType | None = None
+    action_payload: dict[str, Any] = Field(default_factory=dict)
     status: Literal["pending", "approved", "denied"] = "pending"
+    execution_status: Literal["not_executable", "pending", "succeeded", "failed"] = "not_executable"
+    execution_result: str | None = None
     created_at: float
     resolved_at: float | None = None
 

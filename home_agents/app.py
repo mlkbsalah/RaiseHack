@@ -14,17 +14,18 @@ import base64
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .agent_runner import TaskAgent
 from .approvals import ApprovalStore
 from .config import get_settings
+from .google_actions import GoogleWorkspaceActions
 from .llm_client import LLMClient
 from .memory_store import MemoryStore
-from .models import TaskUpdateDraft
+from .models import ActionProposal, TaskUpdateDraft
 from .orchestrator import Orchestrator
 from .scheduler import LatestResults, Scheduler
 from .stream_registry import StreamRegistry
@@ -43,6 +44,7 @@ if settings.mock_mode:
     # mode real devices push their own streams, so don't seed fake ones.
     stream_registry.seed_demo_streams(REPO_ROOT / "data")
 approval_store = ApprovalStore()
+google_actions = GoogleWorkspaceActions(settings)
 orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store)
 task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store)
 latest_results = LatestResults()
@@ -67,6 +69,35 @@ def index() -> FileResponse:
 @app.get("/api/status")
 def status() -> dict:
     return {"mock_mode": settings.mock_mode, "tick_seconds": settings.tick_seconds}
+
+
+# --------------------------------------------------------- google account
+
+
+def _google_redirect_uri(request: Request) -> str:
+    return str(request.url_for("google_callback"))
+
+
+@app.get("/api/google/status")
+def google_status() -> dict:
+    return google_actions.status()
+
+
+@app.get("/api/google/auth/start")
+def google_auth_start(request: Request) -> dict:
+    try:
+        return {"auth_url": google_actions.authorization_url(_google_redirect_uri(request))}
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/google/auth/callback")
+def google_callback(request: Request, state: str, code: str) -> RedirectResponse:
+    try:
+        google_actions.handle_callback(_google_redirect_uri(request), state, code)
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return RedirectResponse("/")
 
 
 # ---------------------------------------------------------------- chat
@@ -177,10 +208,30 @@ def decide_approval(approval_id: str, decision: ApprovalDecision) -> dict:
     approval = approval_store.decide(approval_id, decision.approve)
     if approval is None:
         raise HTTPException(404, "approval not found")
+    execution_note = ""
+    if decision.approve and approval.action_type:
+        try:
+            result = google_actions.execute(
+                ActionProposal(
+                    action=approval.action,
+                    reason=approval.reason,
+                    risk=approval.risk,
+                    action_type=approval.action_type,
+                    action_payload=approval.action_payload,
+                )
+            )
+            approval_store.record_execution(approval.approval_id, True, result)
+            execution_note = f" Executed Google action: {result}"
+        except Exception as exc:
+            result = f"{type(exc).__name__}: {exc}"
+            approval_store.record_execution(approval.approval_id, False, result)
+            execution_note = f" Google action failed: {result}"
+            approval = approval_store.get(approval_id) or approval
     memory_store.append_agent_log(
         approval.task_id,
         approval.task_title,
-        f"User {'approved' if decision.approve else 'denied'} proposed action: {approval.action}",
+        f"User {'approved' if decision.approve else 'denied'} proposed action: "
+        f"{approval.action}.{execution_note}",
     )
     return approval.as_dict()
 

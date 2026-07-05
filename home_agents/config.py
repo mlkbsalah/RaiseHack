@@ -28,6 +28,8 @@ class Settings:
     stream_ttl_seconds: float
     host: str
     port: int
+    google_oauth_client_secrets: Path | None
+    google_oauth_token: Path
 
 
 def _truthy(value: str | None) -> bool:
@@ -36,6 +38,7 @@ def _truthy(value: str | None) -> bool:
 
 def get_settings() -> Settings:
     data_dir = Path(os.environ.get("HOME_AGENTS_DATA_DIR", "home_agents_data")).resolve()
+    client_secrets = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRETS")
     return Settings(
         crusoe_api_key=os.environ.get("CRUSOE_API_KEY"),
         crusoe_base_url=os.environ.get(
@@ -54,4 +57,8 @@ def get_settings() -> Settings:
         stream_ttl_seconds=float(os.environ.get("HOME_AGENTS_STREAM_TTL", "12")),
         host=os.environ.get("HOME_AGENTS_HOST", "127.0.0.1"),
         port=int(os.environ.get("HOME_AGENTS_PORT", "8000")),
+        google_oauth_client_secrets=Path(client_secrets).resolve() if client_secrets else None,
+        google_oauth_token=Path(
+            os.environ.get("GOOGLE_OAUTH_TOKEN", str(data_dir / "google" / "token.json"))
+        ).resolve(),
     )

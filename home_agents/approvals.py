@@ -2,10 +2,8 @@
 
 An agent never executes an ``action_proposal`` itself — it only ever files
 one here. The only way a proposal's status changes is a human clicking
-Approve/Deny in the UI. Nothing in this codebase wires an approval to an
-actual actuator: there is no smart-home/email/Doctolib integration behind
-"approve", by design, so approving something in this prototype can never
-have a real-world side effect.
+Approve/Deny in the UI; approved structured proposals can then be handed to a
+separate executor such as ``google_actions.py``.
 """
 
 from __future__ import annotations
@@ -30,6 +28,9 @@ class ApprovalStore:
             action=proposal.action,
             reason=proposal.reason,
             risk=proposal.risk,
+            action_type=proposal.action_type,
+            action_payload=proposal.action_payload,
+            execution_status="pending" if proposal.action_type else "not_executable",
             status="pending",
             created_at=time(),
         )
@@ -53,6 +54,15 @@ class ApprovalStore:
                 return approval
             approval.status = "approved" if approve else "denied"
             approval.resolved_at = time()
+            return approval
+
+    def record_execution(self, approval_id: str, succeeded: bool, result: str) -> ApprovalRequest | None:
+        with self._lock:
+            approval = self._approvals.get(approval_id)
+            if approval is None:
+                return None
+            approval.execution_status = "succeeded" if succeeded else "failed"
+            approval.execution_result = result
             return approval
 
     def get(self, approval_id: str) -> ApprovalRequest | None:

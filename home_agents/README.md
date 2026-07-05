@@ -40,11 +40,41 @@ HOME_AGENTS_PORT=8000
 HOME_AGENTS_TICK_SECONDS=5
 HOME_AGENTS_STREAM_TTL=12   # seconds a live stream may go quiet before it's
                             # treated as closed and dropped from the live view
+GOOGLE_OAUTH_CLIENT_SECRETS=/absolute/path/to/google-oauth-client.json
+GOOGLE_OAUTH_TOKEN=home_agents_data/google/token.json
 ```
 
 `HOME_AGENTS_MOCK=true` runs the whole system — orchestrator, scheduler,
 agents — without ever calling Crusoe, using keyword heuristics and canned
 observations instead. This is the fastest way to see the full loop.
+
+## Google actions
+
+Agents can propose Google actions, but they still cannot execute anything
+until a resident clicks **Approve**. When approved, the app can run a
+structured `action_proposal` with one of these `action_type` values:
+
+- `send_email` — Gmail send; payload: `to`, `subject`, `body`
+- `create_calendar_event` — Calendar event / optional Google Meet; payload:
+  `summary`, `start`, `end`, `timezone`, `attendees`, `create_meet`
+- `create_task` — Google Tasks item; payload: `title`, optional `notes`,
+  optional `due`
+- `create_keep_note` — Google Keep note; payload: `title`, `text`
+
+To connect Google:
+
+1. Create an OAuth web client in Google Cloud and enable the Gmail, Calendar,
+   Tasks, and Keep APIs needed by your account. Add
+   `http://127.0.0.1:8000/api/google/auth/callback` as an authorized redirect
+   URI, changing the host/port if your app runs elsewhere.
+2. Download the OAuth client JSON locally. Do not commit it.
+3. Set `GOOGLE_OAUTH_CLIENT_SECRETS` in `.env` to that local JSON path.
+4. Start the app and click **Connect Google** in the web UI.
+
+The OAuth token is stored locally at `GOOGLE_OAUTH_TOKEN`, which defaults to
+`home_agents_data/google/token.json`; `home_agents_data/` is ignored by git.
+Google Keep API access is Workspace-oriented, so `create_keep_note` may fail
+cleanly if the connected account or enabled API does not support note creation.
 
 ## Run it
 
@@ -181,13 +211,11 @@ exempt from the TTL.
 
 ### 7. Approvals (`approvals.py`)
 
-A pending-approval queue, nothing more. There is intentionally **no**
-integration wired up behind "approve" — no real smart-home, email, or
-calendar control. Approving a proposal in this codebase only changes its
-status and logs the decision; it can never have a real-world side effect.
-This mirrors `tap_agent`'s hard rule that the system "must never
-automatically close a valve," generalized to "must never automatically do
-anything," since this prototype has no actuators to safely gate.
+A pending-approval queue plus execution metadata. The agent never executes an
+action itself; it files a proposal here. When a resident clicks **Approve**,
+`app.py` can hand a structured Google proposal to `google_actions.py`, which
+executes only known action types with explicit payloads. Proposals without an
+`action_type` remain manual-only and simply get logged.
 
 ### 8. Web app (`app.py` + `frontend/`)
 
@@ -284,10 +312,9 @@ Prefer a stable URL (persistent tunnel or a real deploy)? Any HTTPS host works
 
 ## Known limitations
 
-- No real device/email/calendar integration behind approvals — see
-  "Approvals" above. This is deliberate, not a stub waiting to be filled in
-  carelessly; wiring a real actuator to "approve" is a separate, larger
-  safety decision.
+- Google actions require a local OAuth client JSON and a connected account.
+  Keep support depends on whether the connected account has access to the
+  official Keep API.
 - The scheduler runs tasks sequentially in one background thread; fine for
   a handful of tasks, not meant to scale to dozens of high-frequency ones.
 - Audio uploads are passed through in whatever mime type the browser's
