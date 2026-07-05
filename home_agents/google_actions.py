@@ -23,7 +23,7 @@ GOOGLE_SCOPES = [
 class GoogleWorkspaceActions:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._states: set[str] = set()
+        self._code_verifiers_by_state: dict[str, str] = {}
 
     def status(self) -> dict[str, Any]:
         profile = self.account_profile()
@@ -65,20 +65,22 @@ class GoogleWorkspaceActions:
     def authorization_url(self, redirect_uri: str) -> str:
         flow = self._flow(redirect_uri)
         state = str(uuid4())
-        self._states.add(state)
         auth_url, _ = flow.authorization_url(
             access_type="offline",
             include_granted_scopes="true",
             prompt="consent",
             state=state,
         )
+        if not flow.code_verifier:
+            raise RuntimeError("Google OAuth did not create a code verifier.")
+        self._code_verifiers_by_state[state] = flow.code_verifier
         return auth_url
 
     def handle_callback(self, redirect_uri: str, state: str, code: str) -> None:
-        if state not in self._states:
+        code_verifier = self._code_verifiers_by_state.pop(state, None)
+        if code_verifier is None:
             raise ValueError("Unknown OAuth state.")
-        self._states.remove(state)
-        flow = self._flow(redirect_uri, state=state)
+        flow = self._flow(redirect_uri, state=state, code_verifier=code_verifier)
         flow.fetch_token(code=code)
         self._token_path.parent.mkdir(parents=True, exist_ok=True)
         self._token_path.write_text(flow.credentials.to_json(), encoding="utf-8")
@@ -101,7 +103,12 @@ class GoogleWorkspaceActions:
     def _token_path(self) -> Path:
         return self.settings.google_oauth_token
 
-    def _flow(self, redirect_uri: str, state: str | None = None):
+    def _flow(
+        self,
+        redirect_uri: str,
+        state: str | None = None,
+        code_verifier: str | None = None,
+    ):
         self._require_google_packages()
         from google_auth_oauthlib.flow import Flow
 
@@ -115,6 +122,7 @@ class GoogleWorkspaceActions:
             scopes=GOOGLE_SCOPES,
             redirect_uri=redirect_uri,
             state=state,
+            code_verifier=code_verifier,
         )
 
     def _credentials(self):
