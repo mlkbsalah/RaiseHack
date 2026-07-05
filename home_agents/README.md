@@ -60,7 +60,9 @@ structured `action_proposal` with one of these `action_type` values:
   `summary`, `start`, `end`, `timezone`, `attendees`, `create_meet`
 - `create_task` — Google Tasks item; payload: `title`, optional `notes`,
   optional `due`
-- `create_keep_note` — Google Keep note; payload: `title`, `text`
+- `create_keep_note` — Google Keep note; payload: `title`, `text`. This is
+  not included in the default OAuth consent because many Google accounts reject
+  the Keep scope; enable it separately only if your account supports it.
 
 To connect Google:
 
@@ -68,7 +70,7 @@ To connect Google:
    *"add my Google account"*. The app asks for the Gmail address to connect
    and stores it locally.
 2. Create an OAuth web client in Google Cloud and enable the Gmail, Calendar,
-   Tasks, and Keep APIs needed by your account. Add
+   and Tasks APIs. Add
    `http://127.0.0.1:8000/api/google/auth/callback` as an authorized redirect
    URI, changing the host/port if your app runs elsewhere.
 3. Download the OAuth client JSON locally. Do not commit it.
