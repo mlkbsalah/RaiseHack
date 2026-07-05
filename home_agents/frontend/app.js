@@ -311,11 +311,31 @@ async function toggleMic() {
     await sendVoice(blob);
     return;
   }
+  // The browser only exposes the microphone in a secure context (HTTPS, or
+  // http://localhost). Over a plain-HTTP LAN IP `navigator.mediaDevices` is
+  // undefined — say so explicitly instead of throwing an opaque TypeError.
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    addMessage(
+      "assistant",
+      "🎤 Microphone unavailable: the browser only allows it over HTTPS or on http://localhost. " +
+        "If you opened the app via a LAN IP, use http://localhost:" + location.port + " instead."
+    );
+    return;
+  }
+  // Give an instant cue that the click registered — asking for mic permission
+  // can block for a while (or forever, if the prompt is dismissed), and without
+  // this the button would just sit there looking dead.
+  micBtn.disabled = true;
+  micBtn.textContent = "…";
   try {
     voiceRecorder = await startVoiceRecording();
   } catch (err) {
-    addMessage("assistant", `Mic error: ${err.message}`);
+    // NotAllowedError (permission blocked/dismissed), NotFoundError (no mic), etc.
+    addMessage("assistant", `Mic error: ${err.name ? err.name + " — " : ""}${err.message || err}`);
+    micBtn.textContent = "🎤";
     return;
+  } finally {
+    micBtn.disabled = false;
   }
   recording = true;
   micBtn.classList.add("recording");
