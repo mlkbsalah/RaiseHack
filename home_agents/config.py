@@ -22,6 +22,9 @@ class Settings:
     crusoe_base_url: str
     multimodal_model: str
     reasoning_model: str
+    gradium_api_key: str | None
+    stt_language: str | None
+    gradium_voice_id: str | None
     mock_mode: bool
     data_dir: Path
     tick_seconds: float
@@ -31,10 +34,18 @@ class Settings:
     google_oauth_client_secrets: Path | None
     google_oauth_token: Path
     google_account_profile: Path
+    telegram_bot_token: str | None
+    telegram_allowed_chat_ids: frozenset[int]
 
 
 def _truthy(value: str | None) -> bool:
     return value is not None and value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_chat_ids(value: str | None) -> frozenset[int]:
+    if not value:
+        return frozenset()
+    return frozenset(int(part) for part in value.split(",") if part.strip())
 
 
 def get_settings() -> Settings:
@@ -52,6 +63,9 @@ def get_settings() -> Settings:
         reasoning_model=os.environ.get(
             "CRUSOE_REASONING_MODEL", "deepseek-ai/Deepseek-V4-Flash"
         ),
+        gradium_api_key=os.environ.get("GRADIUM_API_KEY"),
+        stt_language=os.environ.get("GRADIUM_STT_LANGUAGE") or None,
+        gradium_voice_id=os.environ.get("GRADIUM_VOICE_ID") or None,
         mock_mode=_truthy(os.environ.get("HOME_AGENTS_MOCK")),
         data_dir=data_dir,
         tick_seconds=float(os.environ.get("HOME_AGENTS_TICK_SECONDS", "5")),
@@ -65,4 +79,6 @@ def get_settings() -> Settings:
         google_account_profile=Path(
             os.environ.get("GOOGLE_ACCOUNT_PROFILE", str(data_dir / "google" / "account.json"))
         ).resolve(),
+        telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN") or None,
+        telegram_allowed_chat_ids=_parse_chat_ids(os.environ.get("TELEGRAM_ALLOWED_CHAT_IDS")),
     )

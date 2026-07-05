@@ -25,21 +25,27 @@ from .approvals import ApprovalStore
 from .config import get_settings
 from .google_action_planner import GoogleActionPlanner
 from .google_actions import GoogleWorkspaceActions
+from .debug_log import DebugLog
 from .llm_client import LLMClient
 from .memory_store import MemoryStore
 from .models import ActionProposal, GoogleActionPlan, TaskUpdateDraft
 from .orchestrator import Orchestrator
+from .safety_monitor import SafetyAlertStore, SafetyMonitor
 from .scheduler import LatestResults, Scheduler
 from .stream_registry import StreamRegistry
+from .synthesis import get_synthesizer
 from .task_store import TaskStore
+from .transcription import get_transcriber
+from .telegram_bot import TelegramBot
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 
 settings = get_settings()
+debug_log = DebugLog(settings.data_dir)
 llm = LLMClient(settings)
 task_store = TaskStore(settings)
-memory_store = MemoryStore(settings)
+memory_store = MemoryStore(settings, debug_log)
 stream_registry = StreamRegistry(settings)
 if settings.mock_mode:
     # Demo streams exist so the tap scenario works with zero hardware; in live
@@ -48,17 +54,29 @@ if settings.mock_mode:
 approval_store = ApprovalStore()
 google_actions = GoogleWorkspaceActions(settings)
 google_action_planner = GoogleActionPlanner(llm)
-orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store)
-task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store)
+orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store, debug_log)
+transcriber = get_transcriber(settings)
+synthesizer = get_synthesizer(settings)
+task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store, debug_log)
 latest_results = LatestResults()
 scheduler = Scheduler(task_store, task_agent, latest_results, settings.tick_seconds)
+safety_alert_store = SafetyAlertStore()
+safety_monitor = SafetyMonitor(llm, stream_registry, safety_alert_store)
+telegram = TelegramBot(settings, orchestrator, task_store, approval_store, scheduler, memory_store)
+orchestrator.telegram = telegram
+task_agent.telegram = telegram
+safety_monitor.telegram = telegram
 pending_google_action: GoogleActionPlan | None = None
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     scheduler.start()
+    safety_monitor.start()
+    telegram.start()
     yield
     scheduler.stop()
+    safety_monitor.stop()
+    telegram.stop()
 
 
 app = FastAPI(title="Home Agents", lifespan=_lifespan)
@@ -72,7 +90,43 @@ def index() -> FileResponse:
 
 @app.get("/api/status")
 def status() -> dict:
-    return {"mock_mode": settings.mock_mode, "tick_seconds": settings.tick_seconds}
+    return {
+        "mock_mode": settings.mock_mode,
+        "tick_seconds": settings.tick_seconds,
+        "stt": transcriber.provider,
+        "tts": "gradium" if synthesizer is not None else "browser",
+        "telegram_enabled": telegram.enabled,
+        "console": True,
+        "debug_log_path": debug_log.path,
+    }
+
+
+@app.get("/api/debug/log")
+def debug_events(after: int = 0) -> dict:
+    """Tail of the in-memory console log for this server session."""
+    return {"events": debug_log.recent(after)}
+
+
+@app.get("/api/debug/memory")
+def debug_memory() -> dict:
+    """Current memory tails shown in the bottom console."""
+    agents = [
+        {
+            "task_id": task.task_id,
+            "title": task.title,
+            "status": task.status,
+            "memory": memory_store.read_agent_memory(task.task_id, task.title),
+        }
+        for task in task_store.list()
+    ]
+    subjects = [
+        {
+            "subject_id": subject_id,
+            "memory": memory_store.read_subject_memory(subject_id),
+        }
+        for subject_id in memory_store.list_subjects()
+    ]
+    return {"agents": agents, "subjects": subjects}
 
 
 # --------------------------------------------------------- google account
@@ -208,6 +262,51 @@ def save_google_account(account: GoogleAccountRequest) -> dict:
     return google_actions.status()
 
 
+class VoiceChatResponse(BaseModel):
+    transcript: str
+    reply: str
+
+
+@app.post("/api/chat/voice", response_model=VoiceChatResponse)
+async def chat_voice(file: UploadFile) -> VoiceChatResponse:
+    """Voice mode: transcribe a spoken clip, then run it through the SAME
+    orchestrator as typed chat. The transcript is returned alongside the reply
+    so the UI can show what was heard."""
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(400, "empty audio upload")
+    mime_type = file.content_type or "audio/wav"
+    try:
+        transcript = transcriber.transcribe(audio, mime_type).strip()
+    except Exception as exc:  # surface provider/network failures legibly in the UI
+        raise HTTPException(502, f"transcription failed: {exc}") from exc
+    if not transcript:
+        raise HTTPException(422, "no speech recognized")
+    reply = orchestrator.handle_message(transcript)
+    return VoiceChatResponse(transcript=transcript, reply=reply)
+
+
+class TTSRequest(BaseModel):
+    text: str
+
+
+@app.post("/api/tts")
+def tts(request: TTSRequest) -> Response:
+    """Synthesize the orchestrator's reply with Gradium and return raw audio.
+
+    Only available when a Gradium key + voice are configured; otherwise the
+    frontend speaks replies with the browser's own voice and never calls this."""
+    if synthesizer is None:
+        raise HTTPException(404, "gradium tts not configured")
+    if not request.text.strip():
+        raise HTTPException(400, "empty text")
+    try:
+        audio, mime_type = synthesizer.synthesize(request.text)
+    except Exception as exc:  # surface provider/network failures legibly in the UI
+        raise HTTPException(502, f"tts failed: {exc}") from exc
+    return Response(content=audio, media_type=mime_type, headers={"Cache-Control": "no-store"})
+
+
 # ---------------------------------------------------------------- tasks
 
 
@@ -324,7 +423,24 @@ def decide_approval(approval_id: str, decision: ApprovalDecision) -> dict:
         f"User {'approved' if decision.approve else 'denied'} proposed action: "
         f"{approval.action}.{execution_note}",
     )
+    telegram.notify_approval_resolved(approval, origin="web")
     return approval.as_dict()
+
+
+# ----------------------------------------------------------------- safety
+
+
+@app.get("/api/safety/alerts")
+def list_safety_alerts() -> list[dict]:
+    return [a.as_dict() for a in safety_alert_store.list_recent()]
+
+
+@app.post("/api/safety/alerts/{alert_id}/dismiss")
+def dismiss_safety_alert(alert_id: str) -> dict:
+    alert = safety_alert_store.dismiss(alert_id)
+    if alert is None:
+        raise HTTPException(404, "alert not found")
+    return alert.as_dict()
 
 
 # --------------------------------------------------------------- streams
@@ -364,7 +480,10 @@ def upload_image(stream_id: str, upload: ImageUpload) -> dict:
         data = base64.b64decode(encoded)
     except (ValueError, IndexError) as exc:
         raise HTTPException(400, f"invalid data url: {exc}") from exc
-    stream_registry.put(stream_id, "image", mime_type, data)
+    try:
+        stream_registry.put(stream_id, "image", mime_type, data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {"stream_id": stream_id, "kind": "image", "bytes": len(data)}
 
 
@@ -372,7 +491,10 @@ def upload_image(stream_id: str, upload: ImageUpload) -> dict:
 async def upload_audio(stream_id: str, file: UploadFile) -> dict:
     data = await file.read()
     mime_type = file.content_type or "audio/webm"
-    stream_registry.put(stream_id, "audio", mime_type, data)
+    try:
+        stream_registry.put(stream_id, "audio", mime_type, data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {"stream_id": stream_id, "kind": "audio", "bytes": len(data)}
 
 

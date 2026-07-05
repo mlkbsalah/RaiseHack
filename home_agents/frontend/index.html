@@ -12,6 +12,8 @@
   <span id="mode-badge" class="badge">connecting…</span>
 </header>
 
+<div id="safety-banner" class="safety-banner" hidden></div>
+
 <main class="layout">
   <section class="panel chat-panel">
     <h2>Orchestrator</h2>
@@ -19,35 +21,77 @@
     <div id="chat-log" class="chat-log"></div>
     <form id="chat-form" class="chat-form">
       <input id="chat-input" type="text" placeholder="Type a message…" autocomplete="off" />
+      <button type="button" id="mic-btn" class="mic-btn" title="Voice input">🎤</button>
       <button type="submit">Send</button>
     </form>
+    <label class="voice-toggle hint"><input type="checkbox" id="speak-replies" /> 🔊 Speak replies</label>
   </section>
 
-  <section class="panel">
-    <h2>Tasks</h2>
-    <div id="task-grid" class="task-grid"></div>
-  </section>
+  <aside class="side-panels" aria-label="Home context">
+    <details class="panel secondary-panel">
+      <summary class="panel-summary">
+        <span>
+          <strong>Tasks</strong>
+          <small>What the home is watching</small>
+        </span>
+      </summary>
+      <div id="task-grid" class="task-grid"></div>
+    </details>
 
-  <section class="panel">
-    <h2>Google actions</h2>
-    <p class="hint">Connect Google to let approved agent proposals send Gmail, create Calendar/Meet events, and add Google Tasks. Keep can be added later only for accounts with supported API access.</p>
-    <div id="google-status" class="google-status hint">Checking Google connection…</div>
-    <div class="row">
-      <button id="google-connect-btn" class="primary">Connect Google</button>
-    </div>
-  </section>
+    <details class="panel secondary-panel">
+      <summary class="panel-summary">
+        <span>
+          <strong>Data streams</strong>
+          <small>Cameras and microphones</small>
+        </span>
+      </summary>
+      <p class="hint">Add one stream per place you want watched — the kitchen, the front door, the nursery. Each stream can be a <strong>camera</strong>, a <strong>mic</strong>, or <strong>both</strong>. Tick what that place needs, then hit Start. You can reference the stream name when you describe a task in the chat.</p>
+      <div class="stream-controls">
+        <button id="add-stream-btn" class="primary">Add stream</button>
+      </div>
+      <div id="stream-cards" class="stream-cards"></div>
+      <h3 class="streams-subhead">Live view — every connected stream</h3>
+      <div id="stream-gallery" class="stream-gallery"></div>
+    </details>
 
-  <section class="panel">
-    <h2>Data streams</h2>
-    <p class="hint">Add one stream per place you want watched — the kitchen, the front door, the nursery. Each stream can be a <strong>camera</strong>, a <strong>mic</strong>, or <strong>both</strong>. Tick what that place needs, then hit Start. You can reference the stream name when you describe a task in the chat.</p>
-    <div class="stream-controls">
-      <button id="add-stream-btn" class="primary">Add stream</button>
-    </div>
-    <div id="stream-cards" class="stream-cards"></div>
-    <h3 class="streams-subhead">Live view — every connected stream</h3>
-    <div id="stream-gallery" class="stream-gallery"></div>
-  </section>
+    <details class="panel secondary-panel">
+      <summary class="panel-summary">
+        <span>
+          <strong>Google actions</strong>
+          <small>Gmail, Calendar, Meet, and Tasks</small>
+        </span>
+      </summary>
+      <p class="hint">Connect Google to let approved agent proposals send Gmail, create Calendar/Meet events, and add Google Tasks. Keep can be added later only for accounts with supported API access.</p>
+      <div id="google-status" class="google-status hint">Checking Google connection…</div>
+      <div class="row">
+        <button id="google-connect-btn" class="primary">Connect Google</button>
+      </div>
+    </details>
+  </aside>
 </main>
+
+<section id="debug-panel" class="debug-panel collapsed" aria-label="Agent console">
+  <div class="debug-head">
+    <button id="debug-toggle" class="debug-toggle" title="Expand console" aria-expanded="false">Console</button>
+    <div class="debug-title">
+      <h2>Agent console</h2>
+      <span id="debug-session" class="hint">Live activity and memory tails</span>
+    </div>
+    <div class="debug-tabs" role="tablist" aria-label="Console views">
+      <button id="debug-tab-log" class="debug-tab active" data-debug-tab="log" role="tab" aria-selected="true">Log</button>
+      <button id="debug-tab-memory" class="debug-tab" data-debug-tab="memory" role="tab" aria-selected="false">Memory</button>
+    </div>
+    <button id="debug-clear" title="Clear the log view">Clear</button>
+  </div>
+  <div class="debug-body">
+    <div id="debug-log-view" class="debug-view active" role="tabpanel" aria-labelledby="debug-tab-log">
+      <div id="debug-log" class="debug-log"></div>
+    </div>
+    <div id="debug-memory-view" class="debug-view" role="tabpanel" aria-labelledby="debug-tab-memory">
+      <div id="debug-memory" class="debug-memory"></div>
+    </div>
+  </div>
+</section>
 
 <script src="/static/app.js"></script>
 </body>

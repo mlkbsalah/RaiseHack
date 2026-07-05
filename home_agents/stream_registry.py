@@ -29,6 +29,11 @@ def _base_name(stream_id: str) -> str:
     return stream_id
 
 
+def _normalize_mime_type(mime_type: str) -> str:
+    """Drop browser codec parameters before validating/storing a MIME type."""
+    return mime_type.split(";", 1)[0].strip().lower()
+
+
 @dataclass
 class StreamState:
     stream_id: str
@@ -75,6 +80,10 @@ class StreamRegistry:
             )
 
     def put(self, stream_id: str, kind: StreamKind, mime_type: str, data: bytes) -> None:
+        # Browsers append codec params (e.g. "audio/mp4; codecs=mp4a.40.2" from
+        # Safari's MediaRecorder) that must be stripped before the allow-list
+        # check, or every such upload is rejected regardless of the base type.
+        mime_type = _normalize_mime_type(mime_type)
         allowed = IMAGE_MIME_TYPES if kind == "image" else AUDIO_MIME_TYPES
         if mime_type not in allowed:
             raise ValueError(f"Unsupported {kind} mime type {mime_type!r}")

@@ -8,6 +8,18 @@ const addStreamBtn = document.getElementById("add-stream-btn");
 const modeBadge = document.getElementById("mode-badge");
 const googleStatusEl = document.getElementById("google-status");
 const googleConnectBtn = document.getElementById("google-connect-btn");
+const micBtn = document.getElementById("mic-btn");
+const speakToggle = document.getElementById("speak-replies");
+const safetyBanner = document.getElementById("safety-banner");
+const debugPanel = document.getElementById("debug-panel");
+const debugToggleBtn = document.getElementById("debug-toggle");
+const debugSessionEl = document.getElementById("debug-session");
+const debugTabs = document.querySelectorAll("[data-debug-tab]");
+const debugLogView = document.getElementById("debug-log-view");
+const debugMemoryView = document.getElementById("debug-memory-view");
+const debugLogEl = document.getElementById("debug-log");
+const debugMemoryEl = document.getElementById("debug-memory");
+const debugClearBtn = document.getElementById("debug-clear");
 
 async function api(path, options) {
   const res = await fetch(path, {
@@ -53,6 +65,7 @@ function addMessage(role, text) {
   }
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
+  return div;
 }
 
 chatForm.addEventListener("submit", async (event) => {
@@ -256,6 +269,43 @@ async function refreshTasks() {
   renderTasks(views);
 }
 
+// The safety banner surfaces the hidden background monitor's alerts — it is
+// not a task, so it never shows up in the task grid above, only here.
+
+function renderSafetyAlerts(alerts) {
+  const active = alerts.filter((a) => a.status === "active");
+  if (active.length === 0) {
+    safetyBanner.hidden = true;
+    safetyBanner.innerHTML = "";
+    return;
+  }
+  safetyBanner.hidden = false;
+  safetyBanner.innerHTML = active
+    .map(
+      (a) => `
+        <div class="safety-alert ${escapeAttr(a.urgency)}">
+          <div class="info">
+            <strong>\u{1F6A8} ${escapeHtml(a.stream_name)}: ${escapeHtml(a.danger_type)}</strong>
+            <span>${escapeHtml(a.description)}</span>
+            <span class="meta">confidence ${Math.round(a.confidence * 100)}% · ${escapeHtml(a.urgency)} urgency</span>
+          </div>
+          <button data-dismiss-alert="${a.alert_id}">Dismiss</button>
+        </div>
+      `
+    )
+    .join("");
+  safetyBanner.querySelectorAll("[data-dismiss-alert]").forEach((btn) =>
+    btn.addEventListener("click", () =>
+      api(`/api/safety/alerts/${btn.dataset.dismissAlert}/dismiss`, { method: "POST" }).then(refreshSafetyAlerts)
+    )
+  );
+}
+
+async function refreshSafetyAlerts() {
+  const alerts = await api("/api/safety/alerts");
+  renderSafetyAlerts(alerts);
+}
+
 // The "Live view" gallery shows the latest frame + clip of EVERY connected
 // stream, whichever phone or script pushed it — not just this device's own
 // camera. Tiles are updated in place (keyed by stream name) so refreshing the
@@ -336,6 +386,13 @@ async function refreshStreams() {
 async function refreshStatus() {
   const status = await api("/api/status");
   modeBadge.textContent = status.mock_mode ? "mock mode" : "live mode";
+  startDebug(status);
+  if (status.stt === "gradium") {
+    micBtn.title = "Voice input (Gradium speech-to-text)";
+  } else if (status.stt) {
+    micBtn.title = "Voice input (mock transcript — set GRADIUM_API_KEY for real STT)";
+  }
+  gradiumTTS = status.tts === "gradium";
 }
 
 async function refreshGoogleStatus() {
@@ -384,6 +441,340 @@ googleConnectBtn.addEventListener("click", async () => {
     addMessage("assistant", `Google auth error: ${err.message}`);
   }
 });
+
+// ---------- agent console: live trace + current memory tails ----------
+//
+// This console is always available. It polls /api/debug/log for human-readable
+// events newer than the last sequence number we've seen, and /api/debug/memory
+// for the current tails of agent and subject memory files. Dynamic text is set
+// via textContent since it can echo user messages and memory contents back.
+
+let debugSeq = 0;
+let debugStarted = false;
+let activeDebugTab = "log";
+
+function appendDebugEntry(ev) {
+  const entry = document.createElement("div");
+  const safeCategory = String(ev.category || "event").replace(/[^a-z0-9_-]/gi, "-");
+  entry.className = `debug-entry cat-${safeCategory}`;
+
+  const meta = document.createElement("div");
+  meta.className = "debug-meta";
+  const time = document.createElement("span");
+  time.className = "debug-time";
+  time.textContent = new Date(ev.at * 1000).toLocaleTimeString();
+  const cat = document.createElement("span");
+  cat.className = "debug-cat";
+  cat.textContent = ev.category;
+  meta.append(time, cat);
+
+  const summary = document.createElement("div");
+  summary.className = "debug-summary";
+  summary.textContent = ev.summary;
+
+  entry.append(meta, summary);
+  if (ev.detail) {
+    const detail = document.createElement("pre");
+    detail.className = "debug-detail";
+    detail.textContent = ev.detail;
+    entry.append(detail);
+  }
+  debugLogEl.appendChild(entry);
+}
+
+async function refreshDebug() {
+  const data = await api(`/api/debug/log?after=${debugSeq}`);
+  if (!data.events.length) return;
+  const nearBottom =
+    debugLogEl.scrollHeight - debugLogEl.scrollTop - debugLogEl.clientHeight < 40;
+  debugLogEl.querySelector(".debug-empty")?.remove();
+  for (const ev of data.events) {
+    appendDebugEntry(ev);
+    debugSeq = Math.max(debugSeq, ev.seq);
+  }
+  if (nearBottom) debugLogEl.scrollTop = debugLogEl.scrollHeight;
+}
+
+function memoryCard(kind, title, subtitle, memory) {
+  const card = document.createElement("div");
+  card.className = "memory-card";
+
+  const head = document.createElement("div");
+  head.className = "memory-card-head";
+  const kindEl = document.createElement("span");
+  kindEl.className = "memory-kind";
+  kindEl.textContent = kind;
+  const titleEl = document.createElement("strong");
+  titleEl.textContent = title;
+  const subEl = document.createElement("span");
+  subEl.className = "hint";
+  subEl.textContent = subtitle;
+  head.append(kindEl, titleEl, subEl);
+
+  const body = document.createElement("pre");
+  body.textContent = memory.trim() || "(empty)";
+  card.append(head, body);
+  return card;
+}
+
+async function refreshMemory() {
+  const data = await api("/api/debug/memory");
+  debugMemoryEl.innerHTML = "";
+  if (!data.agents.length && !data.subjects.length) {
+    const empty = document.createElement("div");
+    empty.className = "debug-empty";
+    empty.textContent = "No task or subject memory yet.";
+    debugMemoryEl.appendChild(empty);
+    return;
+  }
+  for (const agent of data.agents) {
+    debugMemoryEl.appendChild(
+      memoryCard("agent", agent.title, agent.status, agent.memory)
+    );
+  }
+  for (const subject of data.subjects) {
+    debugMemoryEl.appendChild(
+      memoryCard("subject", subject.subject_id, "shared memory", subject.memory)
+    );
+  }
+}
+
+function selectDebugTab(tab) {
+  activeDebugTab = tab;
+  debugTabs.forEach((btn) => {
+    const active = btn.dataset.debugTab === tab;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  debugLogView.classList.toggle("active", tab === "log");
+  debugMemoryView.classList.toggle("active", tab === "memory");
+  debugClearBtn.style.display = tab === "log" ? "inline-block" : "none";
+  if (tab === "memory") refreshMemory().catch(() => {});
+}
+
+function setConsoleCollapsed(collapsed) {
+  debugPanel.classList.toggle("collapsed", collapsed);
+  debugToggleBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  debugToggleBtn.textContent = collapsed ? "Console" : "Collapse";
+  debugToggleBtn.title = collapsed ? "Expand console" : "Collapse console";
+}
+
+function startDebug(status = {}) {
+  if (debugStarted) return;
+  debugStarted = true;
+  if (status.debug_log_path) {
+    const sessionName = status.debug_log_path.split("/").pop();
+    debugSessionEl.textContent = `Persisting session log: ${sessionName}`;
+  }
+  const empty = document.createElement("div");
+  empty.className = "debug-empty";
+  empty.textContent = "Waiting for activity — send a message or run a task.";
+  debugLogEl.appendChild(empty);
+  debugToggleBtn.addEventListener("click", () => {
+    setConsoleCollapsed(!debugPanel.classList.contains("collapsed"));
+  });
+  debugTabs.forEach((btn) =>
+    btn.addEventListener("click", () => selectDebugTab(btn.dataset.debugTab))
+  );
+  debugClearBtn.addEventListener("click", () => {
+    debugLogEl.innerHTML = ""; // clears the view only; server keeps its buffer
+  });
+  refreshDebug().catch(() => {});
+  refreshMemory().catch(() => {});
+  selectDebugTab(activeDebugTab);
+  setInterval(() => refreshDebug().catch(() => {}), 2000);
+  setInterval(() => refreshMemory().catch(() => {}), 4000);
+}
+
+// ---------- voice mode: talk to the orchestrator ----------
+//
+// Voice is just another front-end to the SAME orchestrator. We record a mono
+// WAV in the browser (Gradium's pre-recorded STT endpoint takes audio/wav),
+// POST it to /api/chat/voice, and the server transcribes it and runs the exact
+// same handle_message path as typed chat. Replies are optionally spoken back
+// with the browser's built-in speechSynthesis (no extra service or key).
+
+let voiceRecorder = null; // { stop: () => Promise<Blob> } while recording
+let recording = false;
+
+function encodeWav(samples, sampleRate) {
+  // 16-bit PCM, mono. WAV header carries the sample rate, so we don't resample.
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeString = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true); // PCM fmt chunk size
+  view.setUint16(20, 1, true); // format = PCM
+  view.setUint16(22, 1, true); // channels = mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  writeString(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+  return new Blob([view], { type: "audio/wav" });
+}
+
+async function startVoiceRecording() {
+  const media = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AudioCtx();
+  const source = ctx.createMediaStreamSource(media);
+  const processor = ctx.createScriptProcessor(4096, 1, 1);
+  const chunks = [];
+  processor.onaudioprocess = (e) => {
+    chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  };
+  source.connect(processor);
+  processor.connect(ctx.destination); // some browsers only fire the callback when connected
+  return {
+    async stop() {
+      processor.disconnect();
+      source.disconnect();
+      media.getTracks().forEach((t) => t.stop());
+      const sampleRate = ctx.sampleRate;
+      await ctx.close();
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const merged = new Float32Array(total);
+      let o = 0;
+      for (const c of chunks) {
+        merged.set(c, o);
+        o += c.length;
+      }
+      return encodeWav(merged, sampleRate);
+    },
+  };
+}
+
+async function toggleMic() {
+  if (recording) {
+    recording = false;
+    micBtn.classList.remove("recording");
+    micBtn.textContent = "🎤";
+    const rec = voiceRecorder;
+    voiceRecorder = null;
+    if (!rec) return;
+    let blob;
+    try {
+      blob = await rec.stop();
+    } catch (err) {
+      addMessage("assistant", `Couldn't finish recording: ${err.message}`);
+      return;
+    }
+    await sendVoice(blob);
+    return;
+  }
+  // The browser only exposes the microphone in a secure context (HTTPS, or
+  // http://localhost). Over a plain-HTTP LAN IP `navigator.mediaDevices` is
+  // undefined — say so explicitly instead of throwing an opaque TypeError.
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    addMessage(
+      "assistant",
+      "🎤 Microphone unavailable: the browser only allows it over HTTPS or on http://localhost. " +
+        "If you opened the app via a LAN IP, use http://localhost:" + location.port + " instead."
+    );
+    return;
+  }
+  // Give an instant cue that the click registered — asking for mic permission
+  // can block for a while (or forever, if the prompt is dismissed), and without
+  // this the button would just sit there looking dead.
+  micBtn.disabled = true;
+  micBtn.textContent = "…";
+  try {
+    voiceRecorder = await startVoiceRecording();
+  } catch (err) {
+    // NotAllowedError (permission blocked/dismissed), NotFoundError (no mic), etc.
+    addMessage("assistant", `Mic error: ${err.name ? err.name + " — " : ""}${err.message || err}`);
+    micBtn.textContent = "🎤";
+    return;
+  } finally {
+    micBtn.disabled = false;
+  }
+  recording = true;
+  micBtn.classList.add("recording");
+  micBtn.textContent = "⏹";
+}
+
+async function sendVoice(blob) {
+  const pending = addMessage("user", "🎤 …"); // fill in with the transcript once heard
+  const form = new FormData();
+  form.append("file", blob, "voice.wav");
+  try {
+    const res = await fetch("/api/chat/voice", { method: "POST", body: form });
+    if (!res.ok) throw new Error(await errorDetail(res));
+    const { transcript, reply } = await res.json();
+    pending.textContent = transcript;
+    addMessage("assistant", reply);
+    if (speakToggle && speakToggle.checked) speak(reply);
+  } catch (err) {
+    pending.textContent = "🎤 (voice)";
+    addMessage("assistant", `Voice error: ${err.message}`);
+  }
+  refreshTasks();
+}
+
+// Reply speech: use Gradium TTS when the server has it configured (so both
+// halves of the conversation share one voice), otherwise the browser's own
+// voice. Any Gradium failure falls back to the browser rather than going silent.
+let gradiumTTS = false;
+
+// Pull a human-readable message out of a failed response, unwrapping FastAPI's
+// {"detail": ...} envelope so Gradium's own error text reaches the user.
+async function errorDetail(res) {
+  let body = "";
+  try {
+    body = await res.text();
+  } catch {
+    /* no body */
+  }
+  try {
+    body = JSON.parse(body).detail ?? body;
+  } catch {
+    /* not JSON */
+  }
+  return `${res.status} ${body}`.trim().slice(0, 240);
+}
+
+async function speak(text) {
+  if (gradiumTTS) {
+    try {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error(await errorDetail(res));
+      const audio = new Audio(URL.createObjectURL(await res.blob()));
+      await audio.play();
+      return;
+    } catch (err) {
+      // Explicit, not silent: show why Gradium TTS failed, then fall back to
+      // the browser voice so the reply is still spoken.
+      console.error("Gradium TTS failed:", err);
+      addMessage("assistant", `⚠️ Gradium TTS failed — using the browser voice instead. (${err.message})`);
+    }
+  }
+  browserSpeak(text);
+}
+
+function browserSpeak(text) {
+  if (!("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+}
+
+if (micBtn) micBtn.addEventListener("click", toggleMic);
 
 // ---------- multi-stream live capture: each stream = camera + voice ----------
 //
@@ -590,5 +981,7 @@ refreshStatus();
 refreshGoogleStatus();
 refreshTasks();
 refreshStreams();
+refreshSafetyAlerts();
 setInterval(refreshTasks, 4000);
 setInterval(refreshStreams, 4000);
+setInterval(refreshSafetyAlerts, 3000);

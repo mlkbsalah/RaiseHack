@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
 
+from .debug_log import DebugLog
 from .llm_client import LLMClient, schema_instruction, validate_json
 from .memory_store import MemoryStore
 from .models import OrchestratorReply, StreamRequirement, TaskDraft, TaskSpec, TaskUpdateDraft
@@ -54,11 +56,17 @@ class Orchestrator:
         task_store: TaskStore,
         stream_registry: StreamRegistry,
         memory_store: MemoryStore,
+        debug: DebugLog | None = None,
     ) -> None:
         self.llm = llm
         self.task_store = task_store
         self.stream_registry = stream_registry
         self.memory_store = memory_store
+        self.debug = debug or DebugLog()
+        # Set by app.py once the optional Telegram bridge exists; left duck-typed
+        # (rather than importing TelegramBot) so this module has no dependency on
+        # Telegram at all when it isn't configured.
+        self.telegram: Any | None = None
 
     def handle_message(
         self,
@@ -71,10 +79,26 @@ class Orchestrator:
         context = self._build_context()
         if google_configured is not None:
             context["google_configured"] = google_configured
+        mode = "mock" if self.llm.settings.mock_mode else "live"
+        self.debug.emit(
+            "orchestrator",
+            f"heard [{mode}]: {message}",
+            "context: "
+            f"{len(context['existing_tasks'])} task(s), "
+            f"{len(context['known_streams'])} stream(s), "
+            f"{len(context['known_subjects'])} subject(s)",
+        )
         if self.llm.settings.mock_mode:
             reply = self._mock_reply(message)
         else:
             reply = self._live_reply(message, context)
+        self.debug.emit(
+            "orchestrator",
+            f"decided: {reply.intent}"
+            + (f" → {reply.target_task_id}" if reply.target_task_id else "")
+            + (f" → new task '{reply.task.title}'" if reply.task else ""),
+            self._decision_detail(reply),
+        )
         return self._apply(
             reply,
             google_auth_url=google_auth_url,
@@ -82,6 +106,19 @@ class Orchestrator:
             google_account_email=google_account_email,
             google_connected=google_connected,
         )
+
+    def _decision_detail(self, reply: OrchestratorReply) -> str:
+        lines = [f"reply: {reply.reply}"]
+        if reply.task is not None:
+            draft = reply.task
+            streams = ", ".join(f"{s.stream_id}({s.kind})" for s in draft.streams) or "none"
+            lines += [
+                f"focus: {draft.focus}",
+                f"interval: {draft.interval_seconds}s",
+                f"subject: {draft.subject_label or draft.subject_id or '—'}",
+                f"streams: {streams}",
+            ]
+        return "\n".join(lines)
 
     def _build_context(self) -> dict:
         tasks = self.task_store.list()
@@ -169,6 +206,8 @@ class Orchestrator:
             subject_id = self.memory_store.resolve_subject_id(label, draft.subject_id)
         task = TaskSpec.from_draft(draft.model_copy(update={"subject_id": subject_id}))
         self.task_store.add(task)
+        if self.telegram is not None:
+            self.telegram.notify_task_created(task)
         known = set(self.stream_registry.known_ids())
         missing = [s.stream_id for s in task.streams if s.stream_id not in known]
         note = f" Still waiting on stream(s): {', '.join(missing)}." if missing else ""

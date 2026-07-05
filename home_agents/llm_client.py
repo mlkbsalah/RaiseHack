@@ -22,7 +22,7 @@ from .config import Settings, get_settings
 T = TypeVar("T", bound=BaseModel)
 
 IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
-AUDIO_MIME_TYPES = {"audio/wav", "audio/mpeg", "audio/webm", "audio/ogg"}
+AUDIO_MIME_TYPES = {"audio/wav", "audio/mpeg", "audio/webm", "audio/ogg", "audio/mp4"}
 
 
 def data_url_from_bytes(data: bytes, mime_type: str) -> str:
