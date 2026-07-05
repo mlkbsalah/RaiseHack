@@ -6,6 +6,8 @@ const streamGallery = document.getElementById("stream-gallery");
 const streamCardsEl = document.getElementById("stream-cards");
 const addStreamBtn = document.getElementById("add-stream-btn");
 const modeBadge = document.getElementById("mode-badge");
+const micBtn = document.getElementById("mic-btn");
+const speakToggle = document.getElementById("speak-replies");
 const safetyBanner = document.getElementById("safety-banner");
 
 async function api(path, options) {
@@ -36,6 +38,7 @@ function addMessage(role, text) {
   div.textContent = text;
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
+  return div;
 }
 
 chatForm.addEventListener("submit", async (event) => {
@@ -342,7 +345,203 @@ async function refreshStreams() {
 async function refreshStatus() {
   const status = await api("/api/status");
   modeBadge.textContent = status.mock_mode ? "mock mode" : "live mode";
+  if (status.stt === "gradium") {
+    micBtn.title = "Voice input (Gradium speech-to-text)";
+  } else if (status.stt) {
+    micBtn.title = "Voice input (mock transcript — set GRADIUM_API_KEY for real STT)";
+  }
+  gradiumTTS = status.tts === "gradium";
 }
+
+// ---------- voice mode: talk to the orchestrator ----------
+//
+// Voice is just another front-end to the SAME orchestrator. We record a mono
+// WAV in the browser (Gradium's pre-recorded STT endpoint takes audio/wav),
+// POST it to /api/chat/voice, and the server transcribes it and runs the exact
+// same handle_message path as typed chat. Replies are optionally spoken back
+// with the browser's built-in speechSynthesis (no extra service or key).
+
+let voiceRecorder = null; // { stop: () => Promise<Blob> } while recording
+let recording = false;
+
+function encodeWav(samples, sampleRate) {
+  // 16-bit PCM, mono. WAV header carries the sample rate, so we don't resample.
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeString = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true); // PCM fmt chunk size
+  view.setUint16(20, 1, true); // format = PCM
+  view.setUint16(22, 1, true); // channels = mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  writeString(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+  return new Blob([view], { type: "audio/wav" });
+}
+
+async function startVoiceRecording() {
+  const media = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AudioCtx();
+  const source = ctx.createMediaStreamSource(media);
+  const processor = ctx.createScriptProcessor(4096, 1, 1);
+  const chunks = [];
+  processor.onaudioprocess = (e) => {
+    chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  };
+  source.connect(processor);
+  processor.connect(ctx.destination); // some browsers only fire the callback when connected
+  return {
+    async stop() {
+      processor.disconnect();
+      source.disconnect();
+      media.getTracks().forEach((t) => t.stop());
+      const sampleRate = ctx.sampleRate;
+      await ctx.close();
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const merged = new Float32Array(total);
+      let o = 0;
+      for (const c of chunks) {
+        merged.set(c, o);
+        o += c.length;
+      }
+      return encodeWav(merged, sampleRate);
+    },
+  };
+}
+
+async function toggleMic() {
+  if (recording) {
+    recording = false;
+    micBtn.classList.remove("recording");
+    micBtn.textContent = "🎤";
+    const rec = voiceRecorder;
+    voiceRecorder = null;
+    if (!rec) return;
+    let blob;
+    try {
+      blob = await rec.stop();
+    } catch (err) {
+      addMessage("assistant", `Couldn't finish recording: ${err.message}`);
+      return;
+    }
+    await sendVoice(blob);
+    return;
+  }
+  // The browser only exposes the microphone in a secure context (HTTPS, or
+  // http://localhost). Over a plain-HTTP LAN IP `navigator.mediaDevices` is
+  // undefined — say so explicitly instead of throwing an opaque TypeError.
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    addMessage(
+      "assistant",
+      "🎤 Microphone unavailable: the browser only allows it over HTTPS or on http://localhost. " +
+        "If you opened the app via a LAN IP, use http://localhost:" + location.port + " instead."
+    );
+    return;
+  }
+  // Give an instant cue that the click registered — asking for mic permission
+  // can block for a while (or forever, if the prompt is dismissed), and without
+  // this the button would just sit there looking dead.
+  micBtn.disabled = true;
+  micBtn.textContent = "…";
+  try {
+    voiceRecorder = await startVoiceRecording();
+  } catch (err) {
+    // NotAllowedError (permission blocked/dismissed), NotFoundError (no mic), etc.
+    addMessage("assistant", `Mic error: ${err.name ? err.name + " — " : ""}${err.message || err}`);
+    micBtn.textContent = "🎤";
+    return;
+  } finally {
+    micBtn.disabled = false;
+  }
+  recording = true;
+  micBtn.classList.add("recording");
+  micBtn.textContent = "⏹";
+}
+
+async function sendVoice(blob) {
+  const pending = addMessage("user", "🎤 …"); // fill in with the transcript once heard
+  const form = new FormData();
+  form.append("file", blob, "voice.wav");
+  try {
+    const res = await fetch("/api/chat/voice", { method: "POST", body: form });
+    if (!res.ok) throw new Error(await errorDetail(res));
+    const { transcript, reply } = await res.json();
+    pending.textContent = transcript;
+    addMessage("assistant", reply);
+    if (speakToggle && speakToggle.checked) speak(reply);
+  } catch (err) {
+    pending.textContent = "🎤 (voice)";
+    addMessage("assistant", `Voice error: ${err.message}`);
+  }
+  refreshTasks();
+}
+
+// Reply speech: use Gradium TTS when the server has it configured (so both
+// halves of the conversation share one voice), otherwise the browser's own
+// voice. Any Gradium failure falls back to the browser rather than going silent.
+let gradiumTTS = false;
+
+// Pull a human-readable message out of a failed response, unwrapping FastAPI's
+// {"detail": ...} envelope so Gradium's own error text reaches the user.
+async function errorDetail(res) {
+  let body = "";
+  try {
+    body = await res.text();
+  } catch {
+    /* no body */
+  }
+  try {
+    body = JSON.parse(body).detail ?? body;
+  } catch {
+    /* not JSON */
+  }
+  return `${res.status} ${body}`.trim().slice(0, 240);
+}
+
+async function speak(text) {
+  if (gradiumTTS) {
+    try {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error(await errorDetail(res));
+      const audio = new Audio(URL.createObjectURL(await res.blob()));
+      await audio.play();
+      return;
+    } catch (err) {
+      // Explicit, not silent: show why Gradium TTS failed, then fall back to
+      // the browser voice so the reply is still spoken.
+      console.error("Gradium TTS failed:", err);
+      addMessage("assistant", `⚠️ Gradium TTS failed — using the browser voice instead. (${err.message})`);
+    }
+  }
+  browserSpeak(text);
+}
+
+function browserSpeak(text) {
+  if (!("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+}
+
+if (micBtn) micBtn.addEventListener("click", toggleMic);
 
 // ---------- multi-stream live capture: each stream = camera + voice ----------
 //
