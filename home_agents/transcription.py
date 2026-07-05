@@ -90,15 +90,17 @@ class GradiumTranscriber:
 def _extract_transcript(ndjson: str) -> str:
     """Collapse Gradium's NDJSON stream into one transcript string.
 
-    Each line is a JSON event with a ``type``. Finalized segments arrive as
-    ``end_text``; ``text`` events are interim updates for the current segment.
-    We prefer the finalized ``end_text`` segments and fall back to the last
-    interim ``text`` if no segment was finalized (e.g. a very short clip). This
-    is deliberately forgiving: malformed or unknown lines are skipped rather
-    than raising, so a single odd frame can't sink the whole turn.
+    Gradium streams the transcript word-by-word: each recognized word (or short
+    phrase) arrives as its own ``{"type": "text", "text": <chunk>}`` event,
+    followed by a ``{"type": "end_text", ...}`` boundary event that carries only
+    timing and *no* text. The complete transcript is therefore every ``text``
+    chunk concatenated in order — so we gather them all, not just the last one.
+    (This matches Gradium's own quickstart, which appends every ``text`` event
+    and joins them with spaces.) ``error`` events are surfaced as a raised
+    exception; malformed or unknown lines are skipped so a single odd frame
+    can't sink the whole turn.
     """
-    finals: list[str] = []
-    last_interim = ""
+    chunks: list[str] = []
     for line in ndjson.splitlines():
         line = line.strip()
         if not line:
@@ -109,15 +111,16 @@ def _extract_transcript(ndjson: str) -> str:
             continue
         if not isinstance(event, dict):
             continue
-        text = event.get("text") or ""
-        if not text:
-            continue
-        if event.get("type") == "end_text":
-            finals.append(text)
-        elif event.get("type") == "text":
-            last_interim = text
-    transcript = " ".join(finals) if finals else last_interim
-    return " ".join(transcript.split())
+        event_type = event.get("type")
+        if event_type == "error":
+            raise RuntimeError(
+                f"Gradium STT error: {event.get('message') or event.get('text') or event}"
+            )
+        if event_type == "text":
+            chunk = event.get("text") or ""
+            if chunk:
+                chunks.append(chunk)
+    return " ".join(" ".join(chunks).split())
 
 
 def get_transcriber(settings: Settings) -> Transcriber:
