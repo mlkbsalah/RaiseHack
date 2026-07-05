@@ -10,6 +10,7 @@ demoable without an API key, mirroring ``tap_agent``'s mock mode.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from .llm_client import LLMClient, schema_instruction, validate_json
 from .memory_store import MemoryStore
@@ -58,6 +59,10 @@ class Orchestrator:
         self.task_store = task_store
         self.stream_registry = stream_registry
         self.memory_store = memory_store
+        # Set by app.py once the optional Telegram bridge exists; left duck-typed
+        # (rather than importing TelegramBot) so this module has no dependency on
+        # Telegram at all when it isn't configured.
+        self.telegram: Any | None = None
 
     def handle_message(self, message: str) -> str:
         context = self._build_context()
@@ -136,6 +141,8 @@ class Orchestrator:
             subject_id = self.memory_store.resolve_subject_id(label, draft.subject_id)
         task = TaskSpec.from_draft(draft.model_copy(update={"subject_id": subject_id}))
         self.task_store.add(task)
+        if self.telegram is not None:
+            self.telegram.notify_task_created(task)
         known = set(self.stream_registry.known_ids())
         missing = [s.stream_id for s in task.streams if s.stream_id not in known]
         note = f" Still waiting on stream(s): {', '.join(missing)}." if missing else ""

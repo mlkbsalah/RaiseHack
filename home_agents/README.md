@@ -5,12 +5,14 @@ watched in a chat window, the orchestrator turns that into a scheduled task,
 and a fresh agent call runs periodically to observe, remember, and — only
 with your explicit approval — propose action.
 
-This generalizes `tap_agent/`, which hard-codes exactly one use case (a
-kitchen tap left running). `home_agents/` is a new codebase; it reuses only
-the *pattern* from `tap_agent/specialists.py` — a Crusoe/OpenAI-compatible
-client, JSON-only structured responses validated with Pydantic, a mock mode
-for offline testing — generalized so any task, not just the tap, can be
-described at runtime.
+This started as a generalization of a reference prototype (`tap_agent/`,
+since removed from this repo) that hard-coded exactly one use case — a
+kitchen tap left running. `home_agents/` reused only its *pattern*: a
+Crusoe/OpenAI-compatible client, JSON-only structured responses validated
+with Pydantic, a mock mode for offline testing — generalized so any task,
+not just the tap, can be described at runtime. It has since grown a web UI
+with live multi-stream camera/mic capture and an optional Telegram bridge
+(see below), but the core loop is unchanged.
 
 ## Setup
 
@@ -19,16 +21,16 @@ cd /path/to/repo
 python3 -m venv .venv312          # any Python 3.10+ interpreter
 source .venv312/bin/activate
 pip install -r home_agents/requirements.txt
-cp home_agents/.env.example home_agents/.env   # or export the vars directly
 ```
 
-Required for live mode (real Crusoe calls):
+Create `home_agents/.env` (gitignored — never commit real secrets in it) with
+at least:
 
 ```text
-CRUSOE_API_KEY
+CRUSOE_API_KEY=your-crusoe-key
 ```
 
-Everything else has a default (see `home_agents/.env.example`):
+Everything else has a default:
 
 ```text
 CRUSOE_MULTIMODAL_MODEL=nvidia/Nemotron-3-Nano-Omni-Reasoning-30B-A3B
@@ -40,6 +42,8 @@ HOME_AGENTS_PORT=8000
 HOME_AGENTS_TICK_SECONDS=5
 HOME_AGENTS_STREAM_TTL=12   # seconds a live stream may go quiet before it's
                             # treated as closed and dropped from the live view
+TELEGRAM_BOT_TOKEN=          # optional — see "Telegram bridge" below
+TELEGRAM_ALLOWED_CHAT_IDS=   # optional — comma-separated chat ids
 ```
 
 `HOME_AGENTS_MOCK=true` runs the whole system — orchestrator, scheduler,
@@ -87,8 +91,8 @@ The chat endpoint. One user message → one LLM call → one structured
 `OrchestratorReply` (`intent`, a conversational `reply`, and either a
 `TaskDraft` or a `target_task_id`). Deterministic Python (`_apply`) then
 carries out exactly that one operation against the task store — the LLM
-never touches the task store directly, mirroring how `tap_agent`'s decision
-specialist only *recommends*, never *executes*.
+never touches the task store directly, only ever recommending, never
+executing.
 
 The prompt is grounded in the current system state — existing task
 titles/ids, connected stream ids, known subject ids — passed as `context`,
@@ -97,6 +101,12 @@ so the model references real ids instead of inventing them.
 Supported intents: `create_task`, `pause_task`, `resume_task`,
 `delete_task`, `list_tasks`, `list_streams`, `chat`. `update_task` is
 accepted by the schema but not required for the demo scope.
+
+`handle_message` is the single entrypoint both interfaces use: the web
+chat panel calls it via `/api/chat`, and the Telegram bridge (see below)
+calls it directly for any text message from an authorized chat — so the
+orchestrator has no notion of "web" vs. "Telegram," it just answers
+whoever asked.
 
 In mock mode, `_mock_reply` replaces the LLM call with keyword matching
 (`tap`/`water` → a tap-watching task pre-wired to the demo streams,
@@ -123,12 +133,11 @@ real intervals to see the loop work.
 
 ### 4. Task agent (`agent_runner.py`)
 
-This is the generalized version of `tap_agent`'s three specialists. Where
-the reference project has a separate vision specialist, audio specialist,
-and decision specialist wired together by hand for one scenario, here a
-single multimodal Crusoe call plays all three roles at once, scoped by
-`task.focus` (the free-text description of what this particular task cares
-about). Every run is stateless and self-contained:
+Rather than separate vision/audio/decision specialists wired together by
+hand for one scenario, a single multimodal Crusoe call plays all three
+roles at once, scoped by `task.focus` (the free-text description of what
+this particular task cares about). Every run is stateless and
+self-contained:
 
 1. Read this task's own memory tail (`memory_store.read_agent_memory`).
 2. Read the subject's memory tail, if the task has a `subject_id`.
@@ -140,7 +149,8 @@ about). Every run is stateless and self-contained:
 5. Append a log line to the agent's own memory.
 6. Append any `subject_findings` to the subject's memory.
 7. If there's an `action_proposal`, file it with the `ApprovalStore` — the
-   agent never acts on it itself.
+   agent never acts on it itself — and, if Telegram is configured, push it
+   there immediately with Approve/Deny buttons (see "Telegram bridge").
 
 Mock mode returns a deterministic cycle (every third run flags an anomaly
 with a proposed action) so the approval UI has something to show without
@@ -185,9 +195,14 @@ A pending-approval queue, nothing more. There is intentionally **no**
 integration wired up behind "approve" — no real smart-home, email, or
 calendar control. Approving a proposal in this codebase only changes its
 status and logs the decision; it can never have a real-world side effect.
-This mirrors `tap_agent`'s hard rule that the system "must never
-automatically close a valve," generalized to "must never automatically do
-anything," since this prototype has no actuators to safely gate.
+The rule is simply "must never automatically do anything, ever" — this
+prototype has no actuators to safely gate, on the web or via Telegram.
+
+Both interfaces write through this same `ApprovalStore` instance, so a
+decision made in one place is immediately visible in the other: the web UI
+picks it up on its next 4-second poll, and Telegram gets an explicit push
+(see "Telegram bridge") since it has no polling loop of its own to fall
+back on.
 
 ### 8. Web app (`app.py` + `frontend/`)
 
@@ -221,6 +236,65 @@ entire "launch" story:
   this device's own camera — by polling `/api/streams/pairs` and pointing an
   `<img>`/`<audio>` at `/api/streams/<id>/latest`. Open the app on a wall
   display and every phone in the house shows up as a live tile.
+
+### 9. Telegram bridge (`telegram_bot.py`)
+
+Optional, and fully inert unless `TELEGRAM_BOT_TOKEN` is set: no background
+thread starts and no network call is ever made without it, so the rest of
+the app behaves identically whether or not Telegram is configured. When
+enabled it does three things:
+
+1. **Mirrors the orchestrator chat.** Any authorized chat can type the same
+   free-text task descriptions the web chat panel accepts — it calls the
+   exact same `Orchestrator.handle_message`, so task creation, editing, and
+   listing all work identically from Telegram.
+2. **Pushes approval requests as they're filed.** The moment `TaskAgent.run`
+   creates a new `ApprovalRequest` (see step 7 above), it's sent to every
+   authorized chat as a message with inline **✅ Approve / ❌ Deny** buttons
+   — this is the main point of the integration: a permission request
+   reaches you wherever you are, not only when the web tab is open.
+3. **Exposes `/tasks`** with inline **▶ Run now / ⏸ Pause (or ▶️ Resume) /
+   🗑 Delete** buttons per task, so the task list can be operated entirely
+   from the chat, same as the tile buttons in the web UI.
+
+**Setup:**
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram, `/newbot`, and
+   copy the token it gives you into `TELEGRAM_BOT_TOKEN` in
+   `home_agents/.env`.
+2. Restart the app and message your new bot anything. It will reply "Not
+   authorized" and include your numeric chat id in that reply — copy it into
+   `TELEGRAM_ALLOWED_CHAT_IDS` (comma-separated if more than one person
+   should have access) and restart once more.
+3. Message it again — you're in. `/help` or `/start` prints a short usage
+   summary, `/tasks` lists tasks with buttons.
+
+**Cross-notification is origin-aware in one direction only.** A decision
+made *in Telegram* never re-notifies Telegram — the button press already
+gives that chat its own feedback by editing the message in place — but:
+
+- A **task created anywhere** (web or Telegram) sends a "🆕 New task" message
+  to Telegram. Task creation always goes through the same
+  `Orchestrator._create_task`, so there's no need to track which interface
+  triggered it — a Telegram-originated confirmation just doubles as a receipt.
+- A **decision made in the web UI** (`POST /api/approvals/{id}/decision`)
+  explicitly pushes a resolution message to Telegram, per the requirement
+  that the two interfaces stay in sync in both directions.
+- A **decision made in Telegram** updates the shared `ApprovalStore` directly,
+  so the web UI's next poll reflects it automatically — no separate push is
+  needed the other way since the web UI already polls.
+
+`Orchestrator` and `TaskAgent` each hold a plain `telegram` attribute
+(`None` until `app.py` wires it up after constructing everything) rather
+than importing `TelegramBot` — this keeps both modules working with zero
+knowledge of Telegram when it isn't configured, and avoids a constructor
+cycle (`TelegramBot` needs the orchestrator to answer chat messages; the
+orchestrator needs `TelegramBot` to send notifications).
+
+**Why long polling, not a webhook:** this runs locally or behind a
+Cloudflare tunnel whose URL changes on every run (see below), and long
+polling (`getUpdates`) needs no public endpoint at all — the same tradeoff
+already made for the task `Scheduler`, just one more background thread.
 
 ## Connecting phones (Cloudflare tunnel)
 
@@ -297,4 +371,13 @@ Prefer a stable URL (persistent tunnel or a real deploy)? Any HTTPS host works
 - Subject identity is a user-supplied label (e.g. "pet", "mom"), not
   face/voice recognition — there's no biometric matching in this prototype.
 - `update_task` intent is defined in the schema but not exercised by the
-  UI; editing is currently pause → delete → recreate.
+  web UI; editing is available via the tile's "Edit details" form or the
+  chat, but not yet from Telegram.
+- The Telegram bridge polls on a single background thread: a "Run now" that
+  triggers a real (slow) Crusoe call blocks that thread until it returns,
+  so another incoming Telegram message won't be processed until it's done.
+  Fine for personal, occasional use; not built for high message volume.
+- `TELEGRAM_ALLOWED_CHAT_IDS` is a flat allow-list with no separate linking
+  flow — anyone who has your bot token and guesses/observes a valid chat id
+  in transit could act as that chat. Keep the token secret the same way you
+  keep `CRUSOE_API_KEY` secret.
