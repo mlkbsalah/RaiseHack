@@ -296,6 +296,45 @@ Cloudflare tunnel whose URL changes on every run (see below), and long
 polling (`getUpdates`) needs no public endpoint at all — the same tradeoff
 already made for the task `Scheduler`, just one more background thread.
 
+### 10. Safety monitor (`safety_monitor.py`)
+
+A second, independent background loop, started in `app.py` alongside the
+`Scheduler` but not built on top of it: it isn't a task, so it's never
+created by the orchestrator, never appears in `Tasks.md` / `/api/tasks` /
+the Telegram `/tasks` list, and can't be paused, edited, or deleted by a
+user. It exists to catch things nobody explicitly asked to be watched for.
+
+Every `SAFETY_TICK_SECONDS` (hardcoded to 5s, not a per-task interval a
+user configures) it walks every currently-connected camera+mic pair from
+`stream_registry.list_pairs()` and checks the latest frame/clip against a
+fixed, hardcoded checklist of household dangers — fire/smoke, a person
+down, a likely intruder, a stove left on unattended, an unattended child
+near a hazard, flooding, distress sounds, an alarm, breaking glass, a
+visible weapon. "Dangerous or abnormal" has no agreed-upon definition, so
+rather than let the model freelance a new definition every run — and drift
+— the checklist is the single source of truth for what counts as a safety
+alert here, in the same spirit as the tap manager's rule that the manager
+is deterministic and the LLM only interprets evidence: the *categories* are
+fixed in code, only the *judgment call per frame* is the model's job.
+
+A hit is stored in an in-memory `SafetyAlertStore` (most-recent-first,
+capped list) and, if Telegram is configured, pushed immediately via
+`notify_safety_alert` with siren emoji (🚨) so it reads as more urgent than
+an ordinary approval ping. There's nothing to approve here — it's a
+notification, not an `action_proposal` — so it bypasses `ApprovalStore`
+entirely. `GET /api/safety/alerts` feeds a banner pinned above the rest of
+the web UI (`#safety-banner` in `frontend/index.html`, styled in
+`styles.css`) that stays hidden while there are no active alerts and
+renders every active one with a Dismiss button
+(`POST /api/safety/alerts/{id}/dismiss`); like everything else in this
+prototype, dismissing an alert only changes its own status — there's no
+actuator behind it.
+
+Mock mode uses the same per-stream deterministic cycle pattern as
+`TaskAgent`'s mock observations (see above), cycling through the hardcoded
+checklist so the banner and Telegram push can both be demoed without a
+Crusoe key.
+
 ## Connecting phones (Cloudflare tunnel)
 
 Phone browsers only grant camera/mic access on a **secure origin** — `https://`
@@ -381,3 +420,11 @@ Prefer a stable URL (persistent tunnel or a real deploy)? Any HTTPS host works
   flow — anyone who has your bot token and guesses/observes a valid chat id
   in transit could act as that chat. Keep the token secret the same way you
   keep `CRUSOE_API_KEY` secret.
+- The safety monitor (see above) makes one multimodal call per connected
+  camera+mic pair every 5 seconds regardless of how many user tasks exist,
+  so its Crusoe cost and rate-limit exposure scale with the number of
+  connected streams, independent of the task scheduler's own load.
+- The hardcoded danger checklist in `safety_monitor.py` is fixed in code,
+  not user-editable from the chat or UI — by design, per the request that
+  started this feature, but it means adding or removing a danger category
+  requires a code change and restart.

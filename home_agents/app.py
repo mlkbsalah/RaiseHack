@@ -26,6 +26,7 @@ from .llm_client import LLMClient
 from .memory_store import MemoryStore
 from .models import TaskUpdateDraft
 from .orchestrator import Orchestrator
+from .safety_monitor import SafetyAlertStore, SafetyMonitor
 from .scheduler import LatestResults, Scheduler
 from .stream_registry import StreamRegistry
 from .task_store import TaskStore
@@ -48,16 +49,21 @@ orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store)
 task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store)
 latest_results = LatestResults()
 scheduler = Scheduler(task_store, task_agent, latest_results, settings.tick_seconds)
+safety_alert_store = SafetyAlertStore()
+safety_monitor = SafetyMonitor(llm, stream_registry, safety_alert_store)
 telegram = TelegramBot(settings, orchestrator, task_store, approval_store, scheduler, memory_store)
 orchestrator.telegram = telegram
 task_agent.telegram = telegram
+safety_monitor.telegram = telegram
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     scheduler.start()
+    safety_monitor.start()
     telegram.start()
     yield
     scheduler.stop()
+    safety_monitor.stop()
     telegram.stop()
 
 
@@ -194,6 +200,22 @@ def decide_approval(approval_id: str, decision: ApprovalDecision) -> dict:
     )
     telegram.notify_approval_resolved(approval, origin="web")
     return approval.as_dict()
+
+
+# ----------------------------------------------------------------- safety
+
+
+@app.get("/api/safety/alerts")
+def list_safety_alerts() -> list[dict]:
+    return [a.as_dict() for a in safety_alert_store.list_recent()]
+
+
+@app.post("/api/safety/alerts/{alert_id}/dismiss")
+def dismiss_safety_alert(alert_id: str) -> dict:
+    alert = safety_alert_store.dismiss(alert_id)
+    if alert is None:
+        raise HTTPException(404, "alert not found")
+    return alert.as_dict()
 
 
 # --------------------------------------------------------------- streams
