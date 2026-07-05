@@ -28,6 +28,7 @@ from .orchestrator import Orchestrator
 from .scheduler import LatestResults, Scheduler
 from .stream_registry import StreamRegistry
 from .task_store import TaskStore
+from .transcription import get_transcriber
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
@@ -43,6 +44,7 @@ if settings.mock_mode:
     stream_registry.seed_demo_streams(REPO_ROOT / "data")
 approval_store = ApprovalStore()
 orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store)
+transcriber = get_transcriber(settings)
 task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store)
 latest_results = LatestResults()
 scheduler = Scheduler(task_store, task_agent, latest_results, settings.tick_seconds)
@@ -65,7 +67,11 @@ def index() -> FileResponse:
 
 @app.get("/api/status")
 def status() -> dict:
-    return {"mock_mode": settings.mock_mode, "tick_seconds": settings.tick_seconds}
+    return {
+        "mock_mode": settings.mock_mode,
+        "tick_seconds": settings.tick_seconds,
+        "stt": transcriber.provider,
+    }
 
 
 # ---------------------------------------------------------------- chat
@@ -83,6 +89,30 @@ class ChatResponse(BaseModel):
 def chat(request: ChatRequest) -> ChatResponse:
     reply = orchestrator.handle_message(request.message)
     return ChatResponse(reply=reply)
+
+
+class VoiceChatResponse(BaseModel):
+    transcript: str
+    reply: str
+
+
+@app.post("/api/chat/voice", response_model=VoiceChatResponse)
+async def chat_voice(file: UploadFile) -> VoiceChatResponse:
+    """Voice mode: transcribe a spoken clip, then run it through the SAME
+    orchestrator as typed chat. The transcript is returned alongside the reply
+    so the UI can show what was heard."""
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(400, "empty audio upload")
+    mime_type = file.content_type or "audio/wav"
+    try:
+        transcript = transcriber.transcribe(audio, mime_type).strip()
+    except Exception as exc:  # surface provider/network failures legibly in the UI
+        raise HTTPException(502, f"transcription failed: {exc}") from exc
+    if not transcript:
+        raise HTTPException(422, "no speech recognized")
+    reply = orchestrator.handle_message(transcript)
+    return VoiceChatResponse(transcript=transcript, reply=reply)
 
 
 # ---------------------------------------------------------------- tasks

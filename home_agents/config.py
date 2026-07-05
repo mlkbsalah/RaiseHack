@@ -22,6 +22,8 @@ class Settings:
     crusoe_base_url: str
     multimodal_model: str
     reasoning_model: str
+    gradium_api_key: str | None
+    stt_language: str | None
     mock_mode: bool
     data_dir: Path
     tick_seconds: float
@@ -48,6 +50,8 @@ def get_settings() -> Settings:
         reasoning_model=os.environ.get(
             "CRUSOE_REASONING_MODEL", "deepseek-ai/Deepseek-V4-Flash"
         ),
+        gradium_api_key=os.environ.get("GRADIUM_API_KEY"),
+        stt_language=os.environ.get("GRADIUM_STT_LANGUAGE") or None,
         mock_mode=_truthy(os.environ.get("HOME_AGENTS_MOCK")),
         data_dir=data_dir,
         tick_seconds=float(os.environ.get("HOME_AGENTS_TICK_SECONDS", "5")),

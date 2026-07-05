@@ -6,6 +6,8 @@ const streamGallery = document.getElementById("stream-gallery");
 const streamCardsEl = document.getElementById("stream-cards");
 const addStreamBtn = document.getElementById("add-stream-btn");
 const modeBadge = document.getElementById("mode-badge");
+const micBtn = document.getElementById("mic-btn");
+const speakToggle = document.getElementById("speak-replies");
 
 async function api(path, options) {
   const res = await fetch(path, {
@@ -22,6 +24,7 @@ function addMessage(role, text) {
   div.textContent = text;
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
+  return div;
 }
 
 chatForm.addEventListener("submit", async (event) => {
@@ -211,7 +214,138 @@ async function refreshStreams() {
 async function refreshStatus() {
   const status = await api("/api/status");
   modeBadge.textContent = status.mock_mode ? "mock mode" : "live mode";
+  if (status.stt === "gradium") {
+    micBtn.title = "Voice input (Gradium speech-to-text)";
+  } else if (status.stt) {
+    micBtn.title = "Voice input (mock transcript — set GRADIUM_API_KEY for real STT)";
+  }
 }
+
+// ---------- voice mode: talk to the orchestrator ----------
+//
+// Voice is just another front-end to the SAME orchestrator. We record a mono
+// WAV in the browser (Gradium's pre-recorded STT endpoint takes audio/wav),
+// POST it to /api/chat/voice, and the server transcribes it and runs the exact
+// same handle_message path as typed chat. Replies are optionally spoken back
+// with the browser's built-in speechSynthesis (no extra service or key).
+
+let voiceRecorder = null; // { stop: () => Promise<Blob> } while recording
+let recording = false;
+
+function encodeWav(samples, sampleRate) {
+  // 16-bit PCM, mono. WAV header carries the sample rate, so we don't resample.
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeString = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true); // PCM fmt chunk size
+  view.setUint16(20, 1, true); // format = PCM
+  view.setUint16(22, 1, true); // channels = mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  writeString(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+  return new Blob([view], { type: "audio/wav" });
+}
+
+async function startVoiceRecording() {
+  const media = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AudioCtx();
+  const source = ctx.createMediaStreamSource(media);
+  const processor = ctx.createScriptProcessor(4096, 1, 1);
+  const chunks = [];
+  processor.onaudioprocess = (e) => {
+    chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  };
+  source.connect(processor);
+  processor.connect(ctx.destination); // some browsers only fire the callback when connected
+  return {
+    async stop() {
+      processor.disconnect();
+      source.disconnect();
+      media.getTracks().forEach((t) => t.stop());
+      const sampleRate = ctx.sampleRate;
+      await ctx.close();
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const merged = new Float32Array(total);
+      let o = 0;
+      for (const c of chunks) {
+        merged.set(c, o);
+        o += c.length;
+      }
+      return encodeWav(merged, sampleRate);
+    },
+  };
+}
+
+async function toggleMic() {
+  if (recording) {
+    recording = false;
+    micBtn.classList.remove("recording");
+    micBtn.textContent = "🎤";
+    const rec = voiceRecorder;
+    voiceRecorder = null;
+    if (!rec) return;
+    let blob;
+    try {
+      blob = await rec.stop();
+    } catch (err) {
+      addMessage("assistant", `Couldn't finish recording: ${err.message}`);
+      return;
+    }
+    await sendVoice(blob);
+    return;
+  }
+  try {
+    voiceRecorder = await startVoiceRecording();
+  } catch (err) {
+    addMessage("assistant", `Mic error: ${err.message}`);
+    return;
+  }
+  recording = true;
+  micBtn.classList.add("recording");
+  micBtn.textContent = "⏹";
+}
+
+async function sendVoice(blob) {
+  const pending = addMessage("user", "🎤 …"); // fill in with the transcript once heard
+  const form = new FormData();
+  form.append("file", blob, "voice.wav");
+  try {
+    const res = await fetch("/api/chat/voice", { method: "POST", body: form });
+    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 140)}`);
+    const { transcript, reply } = await res.json();
+    pending.textContent = transcript;
+    addMessage("assistant", reply);
+    if (speakToggle && speakToggle.checked) speak(reply);
+  } catch (err) {
+    pending.textContent = "🎤 (voice)";
+    addMessage("assistant", `Voice error: ${err.message}`);
+  }
+  refreshTasks();
+}
+
+function speak(text) {
+  if (!("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+}
+
+if (micBtn) micBtn.addEventListener("click", toggleMic);
 
 // ---------- multi-stream live capture: each stream = camera + voice ----------
 //
