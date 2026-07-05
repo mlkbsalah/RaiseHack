@@ -27,21 +27,33 @@
     <label class="voice-toggle hint"><input type="checkbox" id="speak-replies" /> 🔊 Speak replies</label>
   </section>
 
-  <section class="panel">
-    <h2>Tasks</h2>
-    <div id="task-grid" class="task-grid"></div>
-  </section>
+  <aside class="side-panels" aria-label="Home context">
+    <details class="panel secondary-panel">
+      <summary class="panel-summary">
+        <span>
+          <strong>Tasks</strong>
+          <small>What the home is watching</small>
+        </span>
+      </summary>
+      <div id="task-grid" class="task-grid"></div>
+    </details>
 
-  <section class="panel">
-    <h2>Data streams</h2>
-    <p class="hint">Add one stream per place you want watched — the kitchen, the front door, the nursery. Each stream can be a <strong>camera</strong>, a <strong>mic</strong>, or <strong>both</strong>. Tick what that place needs, then hit Start. You can reference the stream name when you describe a task in the chat.</p>
-    <div class="stream-controls">
-      <button id="add-stream-btn" class="primary">Add stream</button>
-    </div>
-    <div id="stream-cards" class="stream-cards"></div>
-    <h3 class="streams-subhead">Live view — every connected stream</h3>
-    <div id="stream-gallery" class="stream-gallery"></div>
-  </section>
+    <details class="panel secondary-panel">
+      <summary class="panel-summary">
+        <span>
+          <strong>Data streams</strong>
+          <small>Cameras and microphones</small>
+        </span>
+      </summary>
+      <p class="hint">Add one stream per place you want watched — the kitchen, the front door, the nursery. Each stream can be a <strong>camera</strong>, a <strong>mic</strong>, or <strong>both</strong>. Tick what that place needs, then hit Start. You can reference the stream name when you describe a task in the chat.</p>
+      <div class="stream-controls">
+        <button id="add-stream-btn" class="primary">Add stream</button>
+      </div>
+      <div id="stream-cards" class="stream-cards"></div>
+      <h3 class="streams-subhead">Live view — every connected stream</h3>
+      <div id="stream-gallery" class="stream-gallery"></div>
+    </details>
+  </aside>
 
 </main>
 
