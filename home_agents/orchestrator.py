@@ -312,6 +312,8 @@ class Orchestrator:
         connect_terms = ("connect", "link", "authorize", "authorise", "login", "sign in")
         if any(term in text for term in ("to do", "todo", "to-do", "google task")):
             return False
+        if "calendar" in text and any(term in text for term in ("meeting", "event", "schedule")):
+            return False
         if "add" in text and "account" not in text:
             return False
         if re.search(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", text) and (

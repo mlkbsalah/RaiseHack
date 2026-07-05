@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import re
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile
@@ -143,6 +144,67 @@ def _extract_google_task_title(message: str) -> str | None:
     return None
 
 
+def _extract_calendar_request(message: str) -> dict | None:
+    text = message.strip()
+    lower = text.lower()
+    if "calendar" not in lower and "meeting" not in lower:
+        return None
+    if not any(term in lower for term in ("add", "create", "schedule", "put")):
+        return None
+
+    title = "Meeting"
+    title_match = re.search(
+        r"(?:meeting|event)\s+(?:with|about)\s+(?P<title>.+?)(?:\s+(?:today|tomorrow|on|at)\b|$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if title_match:
+        title = f"Meeting with {title_match.group('title').strip(' .?!')}"
+    elif "manager" in lower:
+        title = "Meeting with manager"
+
+    start = _extract_calendar_start(text)
+    if start is None:
+        return {"title": title, "needs_time": True}
+    end = start + timedelta(hours=1)
+    return {
+        "title": title,
+        "start": start.isoformat(timespec="seconds"),
+        "end": end.isoformat(timespec="seconds"),
+        "timezone": "Europe/Paris",
+    }
+
+
+def _extract_calendar_start(message: str) -> datetime | None:
+    lower = message.lower()
+    date = None
+    now = datetime.now().replace(second=0, microsecond=0)
+    if "tomorrow" in lower:
+        date = now.date() + timedelta(days=1)
+    elif "today" in lower:
+        date = now.date()
+    explicit_date = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", lower)
+    if explicit_date:
+        date = datetime(
+            int(explicit_date.group(1)),
+            int(explicit_date.group(2)),
+            int(explicit_date.group(3)),
+        ).date()
+    time_match = re.search(r"\b(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", lower)
+    if date is None or time_match is None:
+        return None
+    hour = int(time_match.group(1))
+    minute = int(time_match.group(2) or "0")
+    suffix = time_match.group(3)
+    if suffix == "pm" and hour < 12:
+        hour += 12
+    if suffix == "am" and hour == 12:
+        hour = 0
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        return None
+    return datetime.combine(date, datetime.min.time()).replace(hour=hour, minute=minute)
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
     message = chat_request.message
@@ -151,6 +213,42 @@ def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
     if email and any(word in message.lower() for word in google_words):
         google_actions.save_account_email(email)
     google_status_info = google_actions.status()
+    calendar_request = _extract_calendar_request(message)
+    if calendar_request:
+        if calendar_request.get("needs_time"):
+            return ChatResponse(
+                reply=(
+                    f"I can add '{calendar_request['title']}' to Google Calendar. "
+                    "What date and time should I use? For example: tomorrow at 3pm."
+                )
+            )
+        if not google_status_info["connected"]:
+            return ChatResponse(
+                reply=(
+                    f"I can add '{calendar_request['title']}' to Google Calendar after Google is connected. "
+                    "Click Connect Google first."
+                )
+            )
+        try:
+            result = google_actions.execute(
+                ActionProposal(
+                    action=f"Create Google Calendar event: {calendar_request['title']}",
+                    reason="Direct user request from chat.",
+                    risk="low",
+                    action_type="create_calendar_event",
+                    action_payload={
+                        "summary": calendar_request["title"],
+                        "start": calendar_request["start"],
+                        "end": calendar_request["end"],
+                        "timezone": calendar_request["timezone"],
+                        "attendees": [],
+                        "create_meet": True,
+                    },
+                )
+            )
+        except Exception as exc:
+            return ChatResponse(reply=f"I couldn't add that calendar event: {type(exc).__name__}: {exc}")
+        return ChatResponse(reply=result)
     google_task_title = _extract_google_task_title(message)
     if google_task_title:
         if not google_status_info["connected"]:
