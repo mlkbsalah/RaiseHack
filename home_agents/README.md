@@ -42,6 +42,7 @@ HOME_AGENTS_STREAM_TTL=12   # seconds a live stream may go quiet before it's
                             # treated as closed and dropped from the live view
 GOOGLE_OAUTH_CLIENT_SECRETS=/absolute/path/to/google-oauth-client.json
 GOOGLE_OAUTH_TOKEN=home_agents_data/google/token.json
+GOOGLE_ACCOUNT_PROFILE=home_agents_data/google/account.json
 ```
 
 `HOME_AGENTS_MOCK=true` runs the whole system — orchestrator, scheduler,
@@ -63,17 +64,19 @@ structured `action_proposal` with one of these `action_type` values:
 
 To connect Google:
 
-1. Create an OAuth web client in Google Cloud and enable the Gmail, Calendar,
+1. In the app, click **Connect Google** or ask the orchestrator
+   *"add my Google account"*. The app asks for the Gmail address to connect
+   and stores it locally.
+2. Create an OAuth web client in Google Cloud and enable the Gmail, Calendar,
    Tasks, and Keep APIs needed by your account. Add
    `http://127.0.0.1:8000/api/google/auth/callback` as an authorized redirect
    URI, changing the host/port if your app runs elsewhere.
-2. Download the OAuth client JSON locally. Do not commit it.
-3. Set `GOOGLE_OAUTH_CLIENT_SECRETS` in `.env` to that local JSON path.
-4. Start the app and click **Connect Google** in the web UI.
-   You can also ask the orchestrator in chat: *"connect my Gmail account"* or
-   *"add my Google account"*.
+3. Download the OAuth client JSON locally. Do not commit it.
+4. Set `GOOGLE_OAUTH_CLIENT_SECRETS` in `.env` to that local JSON path.
+5. Restart the app, then click **Connect Google** or ask the orchestrator again.
 
-The OAuth token is stored locally at `GOOGLE_OAUTH_TOKEN`, which defaults to
+The Gmail address is stored at `GOOGLE_ACCOUNT_PROFILE`. The OAuth token is
+stored locally at `GOOGLE_OAUTH_TOKEN`, which defaults to
 `home_agents_data/google/token.json`; `home_agents_data/` is ignored by git.
 Google Keep API access is Workspace-oriented, so `create_keep_note` may fail
 cleanly if the connected account or enabled API does not support note creation.

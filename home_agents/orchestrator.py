@@ -10,6 +10,7 @@ demoable without an API key, mirroring ``tap_agent``'s mock mode.
 from __future__ import annotations
 
 import json
+import re
 
 from .llm_client import LLMClient, schema_instruction, validate_json
 from .memory_store import MemoryStore
@@ -64,6 +65,7 @@ class Orchestrator:
         message: str,
         google_auth_url: str | None = None,
         google_configured: bool | None = None,
+        google_account_email: str | None = None,
     ) -> str:
         context = self._build_context()
         if google_configured is not None:
@@ -72,7 +74,12 @@ class Orchestrator:
             reply = self._mock_reply(message)
         else:
             reply = self._live_reply(message, context)
-        return self._apply(reply, google_auth_url=google_auth_url, google_configured=google_configured)
+        return self._apply(
+            reply,
+            google_auth_url=google_auth_url,
+            google_configured=google_configured,
+            google_account_email=google_account_email,
+        )
 
     def _build_context(self) -> dict:
         tasks = self.task_store.list()
@@ -127,6 +134,7 @@ class Orchestrator:
         reply: OrchestratorReply,
         google_auth_url: str | None = None,
         google_configured: bool | None = None,
+        google_account_email: str | None = None,
     ) -> str:
         if reply.intent == "create_task" and reply.task is not None:
             return self._create_task(reply)
@@ -139,7 +147,12 @@ class Orchestrator:
         if reply.intent == "list_streams":
             return self._list_streams(reply.reply)
         if reply.intent == "connect_google":
-            return self._connect_google(reply.reply, google_auth_url, google_configured)
+            return self._connect_google(
+                reply.reply,
+                google_auth_url,
+                google_configured,
+                google_account_email,
+            )
         return reply.reply
 
     def _create_task(self, reply: OrchestratorReply) -> str:
@@ -219,18 +232,27 @@ class Orchestrator:
         prefix: str,
         google_auth_url: str | None,
         google_configured: bool | None,
+        google_account_email: str | None,
     ) -> str:
+        if not google_account_email:
+            return (
+                "Sure. What Gmail address should I connect? "
+                "Send it like: my Gmail is name@gmail.com. "
+                "I will never ask for your Google password."
+            )
         if google_configured is False:
             return (
-                "Google is not configured yet. Set GOOGLE_OAUTH_CLIENT_SECRETS "
-                "in .env to your Google OAuth client JSON path, restart the app, "
-                "then ask me to connect Google again."
+                f"I saved {google_account_email}. To connect it for real actions, "
+                "this app still needs Google OAuth configured by the developer. "
+                "Set GOOGLE_OAUTH_CLIENT_SECRETS to the OAuth client JSON path, "
+                "restart the app, then ask me to connect Google again."
             )
         if not google_auth_url:
             return (
-                f"{prefix}\n\nGoogle connection is available from the Google actions panel."
+                f"{prefix}\n\nI have {google_account_email}. Google connection is "
+                "available from the Google actions panel."
             )
-        return f"{prefix}\n\nOpen this link to connect Google:\n{google_auth_url}"
+        return f"{prefix}\n\nI have {google_account_email}. Open this link to connect Google:\n{google_auth_url}"
 
     # -- mock mode -----------------------------------------------------
 
@@ -288,6 +310,10 @@ class Orchestrator:
     def _is_google_connect_request(self, text: str) -> bool:
         account_terms = ("gmail", "google", "calendar", "tasks", "keep")
         connect_terms = ("connect", "link", "add", "authorize", "authorise", "login", "sign in")
+        if re.search(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", text) and (
+            any(a in text for a in account_terms) or "account" in text or "email" in text
+        ):
+            return True
         return any(a in text for a in account_terms) and any(c in text for c in connect_terms)
 
     def _mock_find_target(self, text: str) -> str | None:

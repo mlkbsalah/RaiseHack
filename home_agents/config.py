@@ -30,6 +30,7 @@ class Settings:
     port: int
     google_oauth_client_secrets: Path | None
     google_oauth_token: Path
+    google_account_profile: Path
 
 
 def _truthy(value: str | None) -> bool:
@@ -60,5 +61,8 @@ def get_settings() -> Settings:
         google_oauth_client_secrets=Path(client_secrets).resolve() if client_secrets else None,
         google_oauth_token=Path(
             os.environ.get("GOOGLE_OAUTH_TOKEN", str(data_dir / "google" / "token.json"))
+        ).resolve(),
+        google_account_profile=Path(
+            os.environ.get("GOOGLE_ACCOUNT_PROFILE", str(data_dir / "google" / "account.json"))
         ).resolve(),
     )

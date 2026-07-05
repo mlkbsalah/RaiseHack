@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,9 @@ class GoogleWorkspaceActions:
         self._states: set[str] = set()
 
     def status(self) -> dict[str, Any]:
+        profile = self.account_profile()
         return {
+            "account_email": profile.get("email"),
             "configured": self.settings.google_oauth_client_secrets is not None
             and self.settings.google_oauth_client_secrets.exists(),
             "connected": self._token_path.exists(),
@@ -42,6 +45,23 @@ class GoogleWorkspaceActions:
                 "create_keep_note",
             ],
         }
+
+    def account_profile(self) -> dict[str, Any]:
+        if not self.settings.google_account_profile.exists():
+            return {}
+        try:
+            return json.loads(self.settings.google_account_profile.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+
+    def save_account_email(self, email: str) -> dict[str, Any]:
+        email = email.strip().lower()
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            raise ValueError("Enter a valid email address.")
+        self.settings.google_account_profile.parent.mkdir(parents=True, exist_ok=True)
+        profile = {**self.account_profile(), "email": email}
+        self.settings.google_account_profile.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+        return profile
 
     def authorization_url(self, redirect_uri: str) -> str:
         flow = self._flow(redirect_uri)

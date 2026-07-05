@@ -340,20 +340,41 @@ async function refreshStatus() {
 
 async function refreshGoogleStatus() {
   const status = await api("/api/google/status");
+  googleConnectBtn.disabled = false;
   if (!status.configured) {
     googleStatusEl.textContent =
-      "Not configured. Set GOOGLE_OAUTH_CLIENT_SECRETS to a Google OAuth client JSON file.";
-    googleConnectBtn.disabled = true;
+      status.account_email
+        ? `Gmail saved: ${status.account_email}. OAuth client setup is still needed before real actions can run.`
+        : "Start by adding your Gmail address. OAuth client setup is needed before real actions can run.";
     return;
   }
-  googleConnectBtn.disabled = false;
   googleStatusEl.textContent = status.connected
-    ? "Google connected. Approved structured actions can execute."
-    : "Google configured, not connected yet.";
+    ? `Google connected${status.account_email ? ` for ${status.account_email}` : ""}. Approved structured actions can execute.`
+    : status.account_email
+      ? `Gmail saved: ${status.account_email}. Ready to authorize Google.`
+      : "Google configured. Add your Gmail address, then authorize Google.";
 }
 
 googleConnectBtn.addEventListener("click", async () => {
   try {
+    let status = await api("/api/google/status");
+    if (!status.account_email) {
+      const email = window.prompt("Which Gmail address should Home Agents connect?");
+      if (!email) return;
+      status = await api("/api/google/account", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      addMessage("assistant", `Saved ${status.account_email}.`);
+    }
+    if (!status.configured) {
+      addMessage(
+        "assistant",
+        "I saved the Gmail address. Real Google actions still need OAuth configured in this app with GOOGLE_OAUTH_CLIENT_SECRETS."
+      );
+      await refreshGoogleStatus();
+      return;
+    }
     const { auth_url } = await api("/api/google/auth/start");
     window.location.href = auth_url;
   } catch (err) {

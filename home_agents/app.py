@@ -11,6 +11,7 @@ directly — see home_agents/README.md for the live-camera walkthrough.
 from __future__ import annotations
 
 import base64
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -111,21 +112,45 @@ class ChatResponse(BaseModel):
     reply: str
 
 
+def _extract_email(message: str) -> str | None:
+    match = re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", message)
+    return match.group(0).lower() if match else None
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
+    message = chat_request.message
+    email = _extract_email(message)
+    google_words = ("gmail", "google", "calendar", "tasks", "keep", "account", "email")
+    if email and any(word in message.lower() for word in google_words):
+        google_actions.save_account_email(email)
     google_status_info = google_actions.status()
     google_auth_url = None
-    if google_status_info["configured"]:
+    if google_status_info["configured"] and google_status_info.get("account_email"):
         try:
             google_auth_url = google_actions.authorization_url(_google_redirect_uri(request))
         except Exception:
             google_auth_url = None
     reply = orchestrator.handle_message(
-        chat_request.message,
+        message,
         google_auth_url=google_auth_url,
         google_configured=google_status_info["configured"],
+        google_account_email=google_status_info.get("account_email"),
     )
     return ChatResponse(reply=reply)
+
+
+class GoogleAccountRequest(BaseModel):
+    email: str
+
+
+@app.post("/api/google/account")
+def save_google_account(account: GoogleAccountRequest) -> dict:
+    try:
+        google_actions.save_account_email(account.email)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return google_actions.status()
 
 
 # ---------------------------------------------------------------- tasks
