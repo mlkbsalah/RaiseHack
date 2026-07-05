@@ -309,7 +309,11 @@ class Orchestrator:
 
     def _is_google_connect_request(self, text: str) -> bool:
         account_terms = ("gmail", "google", "calendar", "tasks", "keep")
-        connect_terms = ("connect", "link", "add", "authorize", "authorise", "login", "sign in")
+        connect_terms = ("connect", "link", "authorize", "authorise", "login", "sign in")
+        if any(term in text for term in ("to do", "todo", "to-do", "google task")):
+            return False
+        if "add" in text and "account" not in text:
+            return False
         if re.search(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", text) and (
             any(a in text for a in account_terms) or "account" in text or "email" in text
         ):

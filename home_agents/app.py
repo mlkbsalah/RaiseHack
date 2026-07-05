@@ -117,6 +117,32 @@ def _extract_email(message: str) -> str | None:
     return match.group(0).lower() if match else None
 
 
+def _extract_google_task_title(message: str) -> str | None:
+    text = message.strip()
+    lower = text.lower()
+    if not any(term in lower for term in ("to do", "todo", "to-do", "google task", "tasks")):
+        return None
+    if not any(term in lower for term in ("add", "create", "put")):
+        return None
+    patterns = [
+        r"(?:add|create|put)\s+(?P<title>.+?)\s+(?:to|on|in)\s+(?:my\s+)?(?:gmail|google)?\s*(?:to[- ]?do\s+list|todo\s+list|tasks?)",
+        r"(?:add|create|put)\s+(?:to|on|in)\s+(?:my\s+)?(?:gmail|google)?\s*(?:to[- ]?do\s+list|todo\s+list|tasks?)\s+(?:that\s+)?(?P<title>.+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            title = re.sub(r"^(that\s+)?i\s+(have|need)\s+to\s+", "", match.group("title").strip(), flags=re.IGNORECASE)
+            return title.strip(" .?!") or None
+    fallback = re.search(
+        r"(?:to[- ]?do\s+list|todo\s+list|tasks?).*?(?:that\s+)?i\s+(?:have|need)\s+to\s+(?P<title>.+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if fallback:
+        return fallback.group("title").strip(" .?!") or None
+    return None
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
     message = chat_request.message
@@ -125,6 +151,28 @@ def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
     if email and any(word in message.lower() for word in google_words):
         google_actions.save_account_email(email)
     google_status_info = google_actions.status()
+    google_task_title = _extract_google_task_title(message)
+    if google_task_title:
+        if not google_status_info["connected"]:
+            return ChatResponse(
+                reply=(
+                    f"I can add '{google_task_title}' to Google Tasks after Google is connected. "
+                    "Click Connect Google first."
+                )
+            )
+        try:
+            result = google_actions.execute(
+                ActionProposal(
+                    action=f"Create Google Task: {google_task_title}",
+                    reason="Direct user request from chat.",
+                    risk="low",
+                    action_type="create_task",
+                    action_payload={"title": google_task_title},
+                )
+            )
+        except Exception as exc:
+            return ChatResponse(reply=f"I couldn't add that Google Task: {type(exc).__name__}: {exc}")
+        return ChatResponse(reply=result)
     google_auth_url = None
     if google_status_info["configured"] and google_status_info.get("account_email"):
         try:
