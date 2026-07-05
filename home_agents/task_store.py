@@ -13,7 +13,7 @@ from pathlib import Path
 from time import time
 
 from .config import Settings
-from .models import TaskSpec
+from .models import TaskSpec, TaskUpdateDraft
 
 
 class TaskStore:
@@ -77,6 +77,21 @@ class TaskStore:
             task.updated_at = time()
             self._tasks[task.task_id] = task
             self._save()
+
+    def patch(self, task_id: str, update: TaskUpdateDraft) -> TaskSpec | None:
+        task = self._tasks.get(task_id)
+        if task is None:
+            return None
+        changes = update.model_dump(exclude_unset=True, exclude_none=True)
+        if "subject_label" in changes:
+            changes.pop("subject_label")
+        if not changes:
+            return task
+        data = task.model_dump()
+        data.update(changes)
+        updated = TaskSpec.model_validate(data)
+        self.update(updated)
+        return updated
 
     def set_status(self, task_id: str, status: str) -> TaskSpec | None:
         task = self._tasks.get(task_id)

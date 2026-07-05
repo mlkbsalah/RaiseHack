@@ -24,12 +24,15 @@ from .approvals import ApprovalStore
 from .config import get_settings
 from .llm_client import LLMClient
 from .memory_store import MemoryStore
+from .models import TaskUpdateDraft
 from .orchestrator import Orchestrator
+from .safety_monitor import SafetyAlertStore, SafetyMonitor
 from .scheduler import LatestResults, Scheduler
 from .stream_registry import StreamRegistry
 from .synthesis import get_synthesizer
 from .task_store import TaskStore
 from .transcription import get_transcriber
+from .telegram_bot import TelegramBot
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
@@ -50,12 +53,22 @@ synthesizer = get_synthesizer(settings)
 task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store)
 latest_results = LatestResults()
 scheduler = Scheduler(task_store, task_agent, latest_results, settings.tick_seconds)
+safety_alert_store = SafetyAlertStore()
+safety_monitor = SafetyMonitor(llm, stream_registry, safety_alert_store)
+telegram = TelegramBot(settings, orchestrator, task_store, approval_store, scheduler, memory_store)
+orchestrator.telegram = telegram
+task_agent.telegram = telegram
+safety_monitor.telegram = telegram
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     scheduler.start()
+    safety_monitor.start()
+    telegram.start()
     yield
     scheduler.stop()
+    safety_monitor.stop()
+    telegram.stop()
 
 
 app = FastAPI(title="Home Agents", lifespan=_lifespan)
@@ -74,6 +87,7 @@ def status() -> dict:
         "tick_seconds": settings.tick_seconds,
         "stt": transcriber.provider,
         "tts": "gradium" if synthesizer is not None else "browser",
+        "telegram_enabled": telegram.enabled,
     }
 
 
@@ -193,6 +207,19 @@ def run_task_now(task_id: str) -> dict:
     return _task_view(task_store.get(task_id))
 
 
+@app.patch("/api/tasks/{task_id}")
+def update_task(task_id: str, update: TaskUpdateDraft) -> dict:
+    if update.subject_id or update.subject_label:
+        label = update.subject_label or update.subject_id or "subject"
+        update = update.model_copy(
+            update={"subject_id": memory_store.resolve_subject_id(label, update.subject_id)}
+        )
+    task = task_store.patch(task_id, update)
+    if task is None:
+        raise HTTPException(404, "task not found")
+    return _task_view(task)
+
+
 @app.delete("/api/tasks/{task_id}")
 def delete_task(task_id: str) -> dict:
     if not task_store.delete(task_id):
@@ -222,7 +249,24 @@ def decide_approval(approval_id: str, decision: ApprovalDecision) -> dict:
         approval.task_title,
         f"User {'approved' if decision.approve else 'denied'} proposed action: {approval.action}",
     )
+    telegram.notify_approval_resolved(approval, origin="web")
     return approval.as_dict()
+
+
+# ----------------------------------------------------------------- safety
+
+
+@app.get("/api/safety/alerts")
+def list_safety_alerts() -> list[dict]:
+    return [a.as_dict() for a in safety_alert_store.list_recent()]
+
+
+@app.post("/api/safety/alerts/{alert_id}/dismiss")
+def dismiss_safety_alert(alert_id: str) -> dict:
+    alert = safety_alert_store.dismiss(alert_id)
+    if alert is None:
+        raise HTTPException(404, "alert not found")
+    return alert.as_dict()
 
 
 # --------------------------------------------------------------- streams
@@ -262,7 +306,10 @@ def upload_image(stream_id: str, upload: ImageUpload) -> dict:
         data = base64.b64decode(encoded)
     except (ValueError, IndexError) as exc:
         raise HTTPException(400, f"invalid data url: {exc}") from exc
-    stream_registry.put(stream_id, "image", mime_type, data)
+    try:
+        stream_registry.put(stream_id, "image", mime_type, data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {"stream_id": stream_id, "kind": "image", "bytes": len(data)}
 
 
@@ -270,7 +317,10 @@ def upload_image(stream_id: str, upload: ImageUpload) -> dict:
 async def upload_audio(stream_id: str, file: UploadFile) -> dict:
     data = await file.read()
     mime_type = file.content_type or "audio/webm"
-    stream_registry.put(stream_id, "audio", mime_type, data)
+    try:
+        stream_registry.put(stream_id, "audio", mime_type, data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {"stream_id": stream_id, "kind": "audio", "bytes": len(data)}
 
 
