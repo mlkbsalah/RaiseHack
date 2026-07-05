@@ -246,8 +246,18 @@ def _complete_pending_calendar_request(message: str) -> dict | None:
     if date is None and pending_calendar_request.get("date"):
         date = datetime.fromisoformat(pending_calendar_request["date"]).date()
     time_value = _extract_calendar_time(message)
-    if date is None or time_value is None:
+    if time_value is None and pending_calendar_request.get("time"):
+        hour, minute = pending_calendar_request["time"].split(":", 1)
+        time_value = int(hour), int(minute)
+    if date is None and time_value is not None:
+        hour, minute = time_value
+        pending_calendar_request["time"] = f"{hour:02d}:{minute:02d}"
+        return {"needs_date": True, "title": pending_calendar_request["title"]}
+    if date is not None and time_value is None:
+        pending_calendar_request["date"] = date.isoformat()
         return {"needs_time": True, "title": pending_calendar_request["title"]}
+    if date is None or time_value is None:
+        return {"needs_datetime": True, "title": pending_calendar_request["title"]}
     hour, minute = time_value
     start = datetime.combine(date, datetime.min.time()).replace(hour=hour, minute=minute)
     end = start + timedelta(hours=1)
@@ -303,11 +313,25 @@ def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
     google_status_info = google_actions.status()
     pending_completed = _complete_pending_calendar_request(message)
     if pending_completed:
+        if pending_completed.get("needs_date"):
+            return ChatResponse(
+                reply=(
+                    f"I have the time for '{pending_completed['title']}'. "
+                    "What date should I use? For example: tomorrow or Monday."
+                )
+            )
         if pending_completed.get("needs_time"):
             return ChatResponse(
                 reply=(
                     f"I still need a time for '{pending_completed['title']}'. "
                     "For example: 3pm."
+                )
+            )
+        if pending_completed.get("needs_datetime"):
+            return ChatResponse(
+                reply=(
+                    f"I still need a date and time for '{pending_completed['title']}'. "
+                    "For example: tomorrow at 3pm."
                 )
             )
         return _execute_calendar_request(pending_completed, google_status_info)
