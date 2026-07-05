@@ -27,6 +27,7 @@ from .memory_store import MemoryStore
 from .orchestrator import Orchestrator
 from .scheduler import LatestResults, Scheduler
 from .stream_registry import StreamRegistry
+from .synthesis import get_synthesizer
 from .task_store import TaskStore
 from .transcription import get_transcriber
 
@@ -45,6 +46,7 @@ if settings.mock_mode:
 approval_store = ApprovalStore()
 orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store)
 transcriber = get_transcriber(settings)
+synthesizer = get_synthesizer(settings)
 task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store)
 latest_results = LatestResults()
 scheduler = Scheduler(task_store, task_agent, latest_results, settings.tick_seconds)
@@ -71,6 +73,7 @@ def status() -> dict:
         "mock_mode": settings.mock_mode,
         "tick_seconds": settings.tick_seconds,
         "stt": transcriber.provider,
+        "tts": "gradium" if synthesizer is not None else "browser",
     }
 
 
@@ -113,6 +116,27 @@ async def chat_voice(file: UploadFile) -> VoiceChatResponse:
         raise HTTPException(422, "no speech recognized")
     reply = orchestrator.handle_message(transcript)
     return VoiceChatResponse(transcript=transcript, reply=reply)
+
+
+class TTSRequest(BaseModel):
+    text: str
+
+
+@app.post("/api/tts")
+def tts(request: TTSRequest) -> Response:
+    """Synthesize the orchestrator's reply with Gradium and return raw audio.
+
+    Only available when a Gradium key + voice are configured; otherwise the
+    frontend speaks replies with the browser's own voice and never calls this."""
+    if synthesizer is None:
+        raise HTTPException(404, "gradium tts not configured")
+    if not request.text.strip():
+        raise HTTPException(400, "empty text")
+    try:
+        audio, mime_type = synthesizer.synthesize(request.text)
+    except Exception as exc:  # surface provider/network failures legibly in the UI
+        raise HTTPException(502, f"tts failed: {exc}") from exc
+    return Response(content=audio, media_type=mime_type, headers={"Cache-Control": "no-store"})
 
 
 # ---------------------------------------------------------------- tasks

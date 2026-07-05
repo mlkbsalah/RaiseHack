@@ -219,6 +219,7 @@ async function refreshStatus() {
   } else if (status.stt) {
     micBtn.title = "Voice input (mock transcript — set GRADIUM_API_KEY for real STT)";
   }
+  gradiumTTS = status.tts === "gradium";
 }
 
 // ---------- voice mode: talk to the orchestrator ----------
@@ -339,7 +340,31 @@ async function sendVoice(blob) {
   refreshTasks();
 }
 
-function speak(text) {
+// Reply speech: use Gradium TTS when the server has it configured (so both
+// halves of the conversation share one voice), otherwise the browser's own
+// voice. Any Gradium failure falls back to the browser rather than going silent.
+let gradiumTTS = false;
+
+async function speak(text) {
+  if (gradiumTTS) {
+    try {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const audio = new Audio(URL.createObjectURL(await res.blob()));
+      await audio.play();
+      return;
+    } catch {
+      // fall through to the browser voice
+    }
+  }
+  browserSpeak(text);
+}
+
+function browserSpeak(text) {
   if (!("speechSynthesis" in window)) return;
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));

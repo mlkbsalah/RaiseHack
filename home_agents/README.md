@@ -42,6 +42,8 @@ HOME_AGENTS_STREAM_TTL=12   # seconds a live stream may go quiet before it's
                             # treated as closed and dropped from the live view
 GRADIUM_API_KEY=            # optional: enables real speech-to-text for voice mode
 GRADIUM_STT_LANGUAGE=       # optional: force a language, e.g. en / fr / de / es / pt
+GRADIUM_VOICE_ID=           # optional: a Gradium voice id -> reply speech uses
+                            # Gradium TTS instead of the browser's built-in voice
 ```
 
 ## Voice mode (talk to the orchestrator)
@@ -61,9 +63,17 @@ test real voice input against an otherwise-mock system (real transcript → mock
 keyword orchestrator) without a Crusoe key. Confirm it's live at
 `/api/status` (`"stt": "gradium"`). **Without a key, voice mode still works** —
 a `MockTranscriber` returns the canned tap command so the whole voice →
-transcript → task loop is demoable offline. Reply speech uses the browser's
-built-in `speechSynthesis`, so no second service or key is needed for the
-talk-back half.
+transcript → task loop is demoable offline.
+
+**Reply speech (talk-back).** The **🔊 Speak replies** toggle reads the
+orchestrator's answer aloud. By default this uses the browser's built-in
+`speechSynthesis` — no key, no network, but a generic OS voice. Set
+`GRADIUM_VOICE_ID` (alongside `GRADIUM_API_KEY`) to a voice from your Gradium
+library and reply speech switches to **Gradium TTS** instead, so both halves of
+the conversation share one voice: the frontend calls `POST /api/tts`, which
+returns Gradium audio (`synthesis.py`). If Gradium TTS ever errors, the UI
+silently falls back to the browser voice, so replies are never lost. Whether the
+server is using Gradium or browser TTS is reported at `/api/status` (`"tts"`).
 
 Provider is pluggable behind the `Transcriber` protocol in `transcription.py`;
 swapping Gradium for another STT service is a single new class. Note that a
