@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import Settings
+from .debug_log import DebugLog
 
 TAIL_CHARS = 4000
 
@@ -26,11 +27,12 @@ def _slugify(label: str) -> str:
 
 
 class MemoryStore:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, debug: DebugLog | None = None) -> None:
         self._agents_dir = settings.data_dir / "memory" / "agents"
         self._subjects_dir = settings.data_dir / "memory" / "subjects"
         self._agents_dir.mkdir(parents=True, exist_ok=True)
         self._subjects_dir.mkdir(parents=True, exist_ok=True)
+        self._debug = debug or DebugLog()
 
     def _agent_path(self, task_id: str) -> Path:
         return self._agents_dir / f"{task_id}.md"
@@ -51,6 +53,11 @@ class MemoryStore:
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         with path.open("a", encoding="utf-8") as fh:
             fh.write(f"- **{stamp}** — {entry}\n")
+        self._debug.emit(
+            "memory",
+            f"agent memory ← {task_title}",
+            f"{path.name}: {entry}",
+        )
 
     def run_count(self, task_id: str) -> int:
         path = self._agent_path(task_id)
@@ -82,6 +89,11 @@ class MemoryStore:
         with path.open("a", encoding="utf-8") as fh:
             for finding in findings:
                 fh.write(f"- **{stamp}** (from *{task_title}*) — {finding}\n")
+        self._debug.emit(
+            "memory",
+            f"subject memory ← {subject_id} ({len(findings)} finding{'s' if len(findings) != 1 else ''})",
+            f"{path.name} (from {task_title}):\n" + "\n".join(f"- {f}" for f in findings),
+        )
 
     def list_subjects(self) -> list[str]:
         return sorted(p.stem for p in self._subjects_dir.glob("*.md"))

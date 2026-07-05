@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from .agent_runner import TaskAgent
 from .approvals import ApprovalStore
 from .config import get_settings
+from .debug_log import DebugLog
 from .llm_client import LLMClient
 from .memory_store import MemoryStore
 from .models import TaskUpdateDraft
@@ -36,17 +37,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 
 settings = get_settings()
+debug_log = DebugLog(settings.data_dir)
 llm = LLMClient(settings)
 task_store = TaskStore(settings)
-memory_store = MemoryStore(settings)
+memory_store = MemoryStore(settings, debug_log)
 stream_registry = StreamRegistry(settings)
 if settings.mock_mode:
     # Demo streams exist so the tap scenario works with zero hardware; in live
     # mode real devices push their own streams, so don't seed fake ones.
     stream_registry.seed_demo_streams(REPO_ROOT / "data")
 approval_store = ApprovalStore()
-orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store)
-task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store)
+orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store, debug_log)
+task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store, debug_log)
 latest_results = LatestResults()
 scheduler = Scheduler(task_store, task_agent, latest_results, settings.tick_seconds)
 safety_alert_store = SafetyAlertStore()
@@ -82,7 +84,37 @@ def status() -> dict:
         "mock_mode": settings.mock_mode,
         "tick_seconds": settings.tick_seconds,
         "telegram_enabled": telegram.enabled,
+        "console": True,
+        "debug_log_path": debug_log.path,
     }
+
+
+@app.get("/api/debug/log")
+def debug_events(after: int = 0) -> dict:
+    """Tail of the in-memory console log for this server session."""
+    return {"events": debug_log.recent(after)}
+
+
+@app.get("/api/debug/memory")
+def debug_memory() -> dict:
+    """Current memory tails shown in the bottom console."""
+    agents = [
+        {
+            "task_id": task.task_id,
+            "title": task.title,
+            "status": task.status,
+            "memory": memory_store.read_agent_memory(task.task_id, task.title),
+        }
+        for task in task_store.list()
+    ]
+    subjects = [
+        {
+            "subject_id": subject_id,
+            "memory": memory_store.read_subject_memory(subject_id),
+        }
+        for subject_id in memory_store.list_subjects()
+    ]
+    return {"agents": agents, "subjects": subjects}
 
 
 # ---------------------------------------------------------------- chat

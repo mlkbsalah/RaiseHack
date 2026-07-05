@@ -40,7 +40,31 @@
     <h3 class="streams-subhead">Live view — every connected stream</h3>
     <div id="stream-gallery" class="stream-gallery"></div>
   </section>
+
 </main>
+
+<section id="debug-panel" class="debug-panel collapsed" aria-label="Agent console">
+  <div class="debug-head">
+    <button id="debug-toggle" class="debug-toggle" title="Expand console" aria-expanded="false">Console</button>
+    <div class="debug-title">
+      <h2>Agent console</h2>
+      <span id="debug-session" class="hint">Live activity and memory tails</span>
+    </div>
+    <div class="debug-tabs" role="tablist" aria-label="Console views">
+      <button id="debug-tab-log" class="debug-tab active" data-debug-tab="log" role="tab" aria-selected="true">Log</button>
+      <button id="debug-tab-memory" class="debug-tab" data-debug-tab="memory" role="tab" aria-selected="false">Memory</button>
+    </div>
+    <button id="debug-clear" title="Clear the log view">Clear</button>
+  </div>
+  <div class="debug-body">
+    <div id="debug-log-view" class="debug-view active" role="tabpanel" aria-labelledby="debug-tab-log">
+      <div id="debug-log" class="debug-log"></div>
+    </div>
+    <div id="debug-memory-view" class="debug-view" role="tabpanel" aria-labelledby="debug-tab-memory">
+      <div id="debug-memory" class="debug-memory"></div>
+    </div>
+  </div>
+</section>
 
 <script src="/static/app.js"></script>
 </body>

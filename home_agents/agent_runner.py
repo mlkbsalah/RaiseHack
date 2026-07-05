@@ -18,6 +18,7 @@ from time import time
 from typing import Any
 
 from .approvals import ApprovalStore
+from .debug_log import DebugLog
 from .llm_client import LLMClient, schema_instruction, validate_json
 from .memory_store import MemoryStore
 from .models import ActionProposal, AgentObservation, AgentRunResult, TaskSpec
@@ -49,6 +50,9 @@ _SYSTEM_PROMPT = (
     "certainty than the evidence in the provided data streams supports; "
     "missing or ambiguous evidence should lower confidence and set "
     "anomaly_detected to false rather than produce a confident claim. "
+    "Memory is historical context only: never report that something is "
+    "present in this run unless it is visible or audible in the current "
+    "data streams. "
     + schema_instruction("AgentObservation", _OBSERVATION_SCHEMA)
 )
 
@@ -60,11 +64,13 @@ class TaskAgent:
         memory: MemoryStore,
         streams: StreamRegistry,
         approvals: ApprovalStore,
+        debug: DebugLog | None = None,
     ) -> None:
         self.llm = llm
         self.memory = memory
         self.streams = streams
         self.approvals = approvals
+        self.debug = debug or DebugLog()
         # Set by app.py once the optional Telegram bridge exists; see orchestrator.py
         # for why this is duck-typed instead of importing TelegramBot directly.
         self.telegram: Any | None = None
@@ -75,12 +81,39 @@ class TaskAgent:
             self.memory.read_subject_memory(task.subject_id) if task.subject_id else ""
         )
         payloads = [self.streams.get_payload(s.stream_id, s.kind) for s in task.streams]
+        connected = [p.stream_id for p in payloads if p.connected]
+        self.debug.emit(
+            "agent",
+            f"run: {task.title}",
+            f"looking for: {task.focus}\n"
+            f"connected streams: {', '.join(connected) or 'none'}",
+        )
 
-        if self.llm.settings.mock_mode:
+        if not task.streams:
+            observation = AgentObservation(
+                summary=(
+                    "No data streams are attached to this task yet; nothing can be "
+                    "observed for this run."
+                ),
+                anomaly_detected=False,
+                confidence=0.0,
+            )
+        elif not connected:
+            observation = AgentObservation(
+                summary="No connected data streams are available right now; nothing can be observed.",
+                anomaly_detected=False,
+                confidence=0.0,
+            )
+        elif self.llm.settings.mock_mode:
             observation = self._mock_observation(task, payloads)
         else:
             observation = self._live_observation(task, agent_memory, subject_memory, payloads)
 
+        self.debug.emit(
+            "agent",
+            f"{task.title}: {observation.summary}",
+            self._observation_detail(observation),
+        )
         self._record(task, observation)
 
         pending_id = None
@@ -96,6 +129,22 @@ class TaskAgent:
             observation=observation,
             pending_approval_id=pending_id,
         )
+
+    def _observation_detail(self, observation: AgentObservation) -> str:
+        lines = [f"confidence: {observation.confidence:.2f}"]
+        if observation.anomaly_detected:
+            lines.append(f"ANOMALY: {observation.anomaly_description or 'unspecified'}")
+        else:
+            lines.append("anomaly: none")
+        if observation.subject_findings:
+            lines.append("subject findings:")
+            lines += [f"  - {f}" for f in observation.subject_findings]
+        if observation.action_proposal is not None:
+            proposal = observation.action_proposal
+            lines.append(
+                f"proposed action ({proposal.risk} risk): {proposal.action} — {proposal.reason}"
+            )
+        return "\n".join(lines)
 
     def _record(self, task: TaskSpec, observation: AgentObservation) -> None:
         pieces = [observation.summary]

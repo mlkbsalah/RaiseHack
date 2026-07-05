@@ -50,6 +50,13 @@ TELEGRAM_ALLOWED_CHAT_IDS=   # optional — comma-separated chat ids
 agents — without ever calling Crusoe, using keyword heuristics and canned
 observations instead. This is the fastest way to see the full loop.
 
+The UI always includes a collapsible **Agent console** at the bottom. Its Log
+tab shows a human-readable live trace of orchestrator decisions, agent
+observations, and memory writes; its Memory tab shows current tails of each
+agent and subject memory file. Log events are kept in an in-memory ring buffer
+for polling (`/api/debug/log`) and persisted as JSONL session files under
+`HOME_AGENTS_DATA_DIR/debug_sessions/`.
+
 ## Run it
 
 ```bash
