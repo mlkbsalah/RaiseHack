@@ -20,7 +20,7 @@ from .task_store import TaskStore
 _REPLY_SCHEMA = {
     "intent": (
         "one of create_task, update_task, pause_task, resume_task, "
-        "delete_task, list_tasks, list_streams, chat"
+        "delete_task, list_tasks, list_streams, connect_google, chat"
     ),
     "reply": "short conversational string shown to the user immediately",
     "task": (
@@ -59,13 +59,20 @@ class Orchestrator:
         self.stream_registry = stream_registry
         self.memory_store = memory_store
 
-    def handle_message(self, message: str) -> str:
+    def handle_message(
+        self,
+        message: str,
+        google_auth_url: str | None = None,
+        google_configured: bool | None = None,
+    ) -> str:
         context = self._build_context()
+        if google_configured is not None:
+            context["google_configured"] = google_configured
         if self.llm.settings.mock_mode:
             reply = self._mock_reply(message)
         else:
             reply = self._live_reply(message, context)
-        return self._apply(reply)
+        return self._apply(reply, google_auth_url=google_auth_url, google_configured=google_configured)
 
     def _build_context(self) -> dict:
         tasks = self.task_store.list()
@@ -101,6 +108,8 @@ class Orchestrator:
             "convert that into exactly one structured operation. Never invent "
             "stream ids that are not in context.known_streams unless the user "
             "is clearly asking about a brand-new device they intend to connect. "
+            "If the user asks to connect Gmail, Google, Calendar, Tasks, Keep, "
+            "or their Google account, use intent connect_google. "
             + schema_instruction("OrchestratorReply", _REPLY_SCHEMA)
         )
         user = json.dumps({"message": message, "context": context}, sort_keys=True)
@@ -113,7 +122,12 @@ class Orchestrator:
         )
         return validate_json(raw, OrchestratorReply)
 
-    def _apply(self, reply: OrchestratorReply) -> str:
+    def _apply(
+        self,
+        reply: OrchestratorReply,
+        google_auth_url: str | None = None,
+        google_configured: bool | None = None,
+    ) -> str:
         if reply.intent == "create_task" and reply.task is not None:
             return self._create_task(reply)
         if reply.intent == "update_task":
@@ -124,6 +138,8 @@ class Orchestrator:
             return self._list_tasks(reply.reply)
         if reply.intent == "list_streams":
             return self._list_streams(reply.reply)
+        if reply.intent == "connect_google":
+            return self._connect_google(reply.reply, google_auth_url, google_configured)
         return reply.reply
 
     def _create_task(self, reply: OrchestratorReply) -> str:
@@ -198,10 +214,33 @@ class Orchestrator:
         lines = [f"- {s['stream_id']} ({s['kind']}, {s['source']})" for s in streams]
         return prefix + "\n" + "\n".join(lines)
 
+    def _connect_google(
+        self,
+        prefix: str,
+        google_auth_url: str | None,
+        google_configured: bool | None,
+    ) -> str:
+        if google_configured is False:
+            return (
+                "Google is not configured yet. Set GOOGLE_OAUTH_CLIENT_SECRETS "
+                "in .env to your Google OAuth client JSON path, restart the app, "
+                "then ask me to connect Google again."
+            )
+        if not google_auth_url:
+            return (
+                f"{prefix}\n\nGoogle connection is available from the Google actions panel."
+            )
+        return f"{prefix}\n\nOpen this link to connect Google:\n{google_auth_url}"
+
     # -- mock mode -----------------------------------------------------
 
     def _mock_reply(self, message: str) -> OrchestratorReply:
         text = message.lower()
+        if self._is_google_connect_request(text):
+            return OrchestratorReply(
+                intent="connect_google",
+                reply="I can connect your Google account for Gmail, Calendar, Tasks, and supported Keep actions.",
+            )
         if "list tasks" in text or "what tasks" in text or "my tasks" in text:
             return OrchestratorReply(intent="list_tasks", reply="Here are your tasks:")
         if "list streams" in text or "what streams" in text or "connected" in text:
@@ -245,6 +284,11 @@ class Orchestrator:
             f"{draft.interval_seconds}s.",
             task=draft,
         )
+
+    def _is_google_connect_request(self, text: str) -> bool:
+        account_terms = ("gmail", "google", "calendar", "tasks", "keep")
+        connect_terms = ("connect", "link", "add", "authorize", "authorise", "login", "sign in")
+        return any(a in text for a in account_terms) and any(c in text for c in connect_terms)
 
     def _mock_find_target(self, text: str) -> str | None:
         for task in self.task_store.list():

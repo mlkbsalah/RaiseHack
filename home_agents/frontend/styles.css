@@ -69,6 +69,7 @@ body {
 .msg { padding: 8px 10px; border-radius: 8px; font-size: 14px; line-height: 1.4; white-space: pre-wrap; }
 .msg.user { background: var(--accent); align-self: flex-end; }
 .msg.assistant { background: var(--border); align-self: flex-start; }
+.msg a { color: #a8c7ff; word-break: break-word; }
 
 .chat-form { display: flex; gap: 8px; }
 .chat-form input { flex: 1; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }

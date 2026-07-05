@@ -70,6 +70,8 @@ To connect Google:
 2. Download the OAuth client JSON locally. Do not commit it.
 3. Set `GOOGLE_OAUTH_CLIENT_SECRETS` in `.env` to that local JSON path.
 4. Start the app and click **Connect Google** in the web UI.
+   You can also ask the orchestrator in chat: *"connect my Gmail account"* or
+   *"add my Google account"*.
 
 The OAuth token is stored locally at `GOOGLE_OAUTH_TOKEN`, which defaults to
 `home_agents_data/google/token.json`; `home_agents_data/` is ignored by git.

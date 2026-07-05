@@ -34,7 +34,23 @@ function escapeAttr(value) {
 function addMessage(role, text) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
-  div.textContent = text;
+  if (role === "assistant") {
+    const parts = String(text).split(/(https?:\/\/\S+)/g);
+    for (const part of parts) {
+      if (/^https?:\/\//.test(part)) {
+        const link = document.createElement("a");
+        link.href = part;
+        link.textContent = part;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        div.appendChild(link);
+      } else {
+        div.appendChild(document.createTextNode(part));
+      }
+    }
+  } else {
+    div.textContent = text;
+  }
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
 }

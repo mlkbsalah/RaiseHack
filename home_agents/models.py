@@ -24,6 +24,7 @@ Intent = Literal[
     "delete_task",
     "list_tasks",
     "list_streams",
+    "connect_google",
     "chat",
 ]
 Risk = Literal["low", "medium", "high"]

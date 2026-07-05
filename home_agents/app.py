@@ -112,8 +112,19 @@ class ChatResponse(BaseModel):
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
-    reply = orchestrator.handle_message(request.message)
+def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
+    google_status_info = google_actions.status()
+    google_auth_url = None
+    if google_status_info["configured"]:
+        try:
+            google_auth_url = google_actions.authorization_url(_google_redirect_uri(request))
+        except Exception:
+            google_auth_url = None
+    reply = orchestrator.handle_message(
+        chat_request.message,
+        google_auth_url=google_auth_url,
+        google_configured=google_status_info["configured"],
+    )
     return ChatResponse(reply=reply)
 
 
