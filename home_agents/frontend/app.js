@@ -6,6 +6,7 @@ const streamGallery = document.getElementById("stream-gallery");
 const streamCardsEl = document.getElementById("stream-cards");
 const addStreamBtn = document.getElementById("add-stream-btn");
 const modeBadge = document.getElementById("mode-badge");
+const safetyBanner = document.getElementById("safety-banner");
 
 async function api(path, options) {
   const res = await fetch(path, {
@@ -222,6 +223,43 @@ async function decide(approvalId, approve) {
 async function refreshTasks() {
   const views = await api("/api/tasks");
   renderTasks(views);
+}
+
+// The safety banner surfaces the hidden background monitor's alerts — it is
+// not a task, so it never shows up in the task grid above, only here.
+
+function renderSafetyAlerts(alerts) {
+  const active = alerts.filter((a) => a.status === "active");
+  if (active.length === 0) {
+    safetyBanner.hidden = true;
+    safetyBanner.innerHTML = "";
+    return;
+  }
+  safetyBanner.hidden = false;
+  safetyBanner.innerHTML = active
+    .map(
+      (a) => `
+        <div class="safety-alert ${escapeAttr(a.urgency)}">
+          <div class="info">
+            <strong>\u{1F6A8} ${escapeHtml(a.stream_name)}: ${escapeHtml(a.danger_type)}</strong>
+            <span>${escapeHtml(a.description)}</span>
+            <span class="meta">confidence ${Math.round(a.confidence * 100)}% · ${escapeHtml(a.urgency)} urgency</span>
+          </div>
+          <button data-dismiss-alert="${a.alert_id}">Dismiss</button>
+        </div>
+      `
+    )
+    .join("");
+  safetyBanner.querySelectorAll("[data-dismiss-alert]").forEach((btn) =>
+    btn.addEventListener("click", () =>
+      api(`/api/safety/alerts/${btn.dataset.dismissAlert}/dismiss`, { method: "POST" }).then(refreshSafetyAlerts)
+    )
+  );
+}
+
+async function refreshSafetyAlerts() {
+  const alerts = await api("/api/safety/alerts");
+  renderSafetyAlerts(alerts);
 }
 
 // The "Live view" gallery shows the latest frame + clip of EVERY connected
@@ -510,5 +548,7 @@ if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
 refreshStatus();
 refreshTasks();
 refreshStreams();
+refreshSafetyAlerts();
 setInterval(refreshTasks, 4000);
 setInterval(refreshStreams, 4000);
+setInterval(refreshSafetyAlerts, 3000);

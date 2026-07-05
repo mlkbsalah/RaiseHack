@@ -132,3 +132,27 @@ class OrchestratorReply(SerializableModel):
     reply: str
     task: TaskDraft | TaskUpdateDraft | None = None
     target_task_id: str | None = None
+
+
+class DangerCheck(SerializableModel):
+    """One safety-monitor tick's verdict for one camera+mic pair."""
+
+    danger_detected: bool
+    danger_type: str | None = None
+    description: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    urgency: Risk = "low"
+
+
+class SafetyAlert(SerializableModel):
+    """A raised danger check, kept for the web banner and Telegram push."""
+
+    alert_id: str
+    stream_name: str
+    danger_type: str
+    description: str
+    confidence: float
+    urgency: Risk
+    status: Literal["active", "dismissed"] = "active"
+    created_at: float
+    dismissed_at: float | None = None

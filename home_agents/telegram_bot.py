@@ -38,7 +38,7 @@ import httpx
 from .approvals import ApprovalStore
 from .config import Settings
 from .memory_store import MemoryStore
-from .models import ApprovalRequest, TaskSpec
+from .models import ApprovalRequest, SafetyAlert, TaskSpec
 from .scheduler import Scheduler
 from .task_store import TaskStore
 
@@ -156,6 +156,24 @@ class TelegramBot:
             return  # that chat already saw its own button press resolve the message
         verb = "Approved ✅" if approval.status == "approved" else "Denied ❌"
         text = f"{verb} from the web interface: {_esc(approval.action)} ({_esc(approval.task_title)})"
+        self._broadcast(text)
+
+    def notify_safety_alert(self, alert: SafetyAlert) -> None:
+        """Push from the hidden background safety monitor, not from any task.
+
+        Deliberately louder than a normal approval ping and with no
+        Approve/Deny buttons — this is a notification only, there is nothing
+        to act on here, so it bypasses ApprovalStore entirely.
+        """
+        if not self.enabled:
+            return
+        siren = {"high": "🚨🚨🚨", "medium": "🚨⚠️", "low": "🚨"}.get(alert.urgency, "🚨")
+        text = (
+            f"{siren} <b>SAFETY ALERT</b> {siren}\n"
+            f"<b>{_esc(alert.stream_name)}</b>: {_esc(alert.danger_type)}\n"
+            f"{_esc(alert.description)}\n"
+            f"Confidence: {alert.confidence:.0%} · urgency: {_esc(alert.urgency)}"
+        )
         self._broadcast(text)
 
     # ------------------------------------------------------------- inbound
