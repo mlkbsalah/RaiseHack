@@ -42,9 +42,48 @@ HOME_AGENTS_PORT=8000
 HOME_AGENTS_TICK_SECONDS=5
 HOME_AGENTS_STREAM_TTL=12   # seconds a live stream may go quiet before it's
                             # treated as closed and dropped from the live view
+GRADIUM_API_KEY=            # optional: enables real speech-to-text for voice mode
+GRADIUM_STT_LANGUAGE=       # optional: force a language, e.g. en / fr / de / es / pt
+GRADIUM_VOICE_ID=           # optional: a Gradium voice id -> reply speech uses
+                            # Gradium TTS instead of the browser's built-in voice
 TELEGRAM_BOT_TOKEN=          # optional — see "Telegram bridge" below
 TELEGRAM_ALLOWED_CHAT_IDS=   # optional — comma-separated chat ids
 ```
+
+## Voice mode (talk to the orchestrator)
+
+The chat panel has a 🎤 button: click it to record, click again to stop. The
+clip is transcribed and fed through the **same** orchestrator as typed chat —
+speaking *"watch the kitchen tap and tell me if it runs unattended"* creates
+exactly the task that typing it would. Tick **🔊 Speak replies** to have the
+orchestrator's answer read back aloud.
+
+Speech-to-text is done by [Gradium](https://gradium.ai): the browser records a
+mono WAV, posts it to `POST /api/chat/voice`, and the server forwards the bytes
+to Gradium's pre-recorded STT endpoint (`transcription.py`). **Just set
+`GRADIUM_API_KEY` in `home_agents/.env` and restart** — that's the only thing
+required, and the key is honoured even in `HOME_AGENTS_MOCK` mode, so you can
+test real voice input against an otherwise-mock system (real transcript → mock
+keyword orchestrator) without a Crusoe key. Confirm it's live at
+`/api/status` (`"stt": "gradium"`). **Without a key, voice mode still works** —
+a `MockTranscriber` returns the canned tap command so the whole voice →
+transcript → task loop is demoable offline.
+
+**Reply speech (talk-back).** The **🔊 Speak replies** toggle reads the
+orchestrator's answer aloud. By default this uses the browser's built-in
+`speechSynthesis` — no key, no network, but a generic OS voice. Set
+`GRADIUM_VOICE_ID` (alongside `GRADIUM_API_KEY`) to a voice from your Gradium
+library and reply speech switches to **Gradium TTS** instead, so both halves of
+the conversation share one voice: the frontend calls `POST /api/tts`, which
+returns Gradium audio (`synthesis.py`). If Gradium TTS ever errors, the UI
+silently falls back to the browser voice, so replies are never lost. Whether the
+server is using Gradium or browser TTS is reported at `/api/status` (`"tts"`).
+
+Provider is pluggable behind the `Transcriber` protocol in `transcription.py`;
+swapping Gradium for another STT service is a single new class. Note that a
+phone/laptop browser only grants microphone access on a secure origin
+(`https://` or `localhost`) — the same Cloudflare-tunnel step used for phone
+cameras below applies to voice input.
 
 `HOME_AGENTS_MOCK=true` runs the whole system — orchestrator, scheduler,
 agents — without ever calling Crusoe, using keyword heuristics and canned
@@ -218,7 +257,10 @@ thing is one process and one URL. The frontend is plain HTML/CSS/JS (no
 build step) so `python -m home_agents.app` and opening a browser is the
 entire "launch" story:
 
-- **Chat panel** — talks to `/api/chat`, i.e. the orchestrator.
+- **Chat panel** — talks to `/api/chat`, i.e. the orchestrator. The 🎤 button
+  records a clip and posts it to `/api/chat/voice`, which transcribes it (see
+  [Voice mode](#voice-mode-talk-to-the-orchestrator)) and runs the same
+  orchestrator path — so you can speak a task instead of typing it.
 - **Task tiles** — one per task, polling `/api/tasks` every 4s. A tile
   turns amber when its last run flagged an anomaly, and red with an
   inline **Approve / Deny** panel when there's a pending action proposal —

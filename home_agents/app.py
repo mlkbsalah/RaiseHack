@@ -30,7 +30,9 @@ from .orchestrator import Orchestrator
 from .safety_monitor import SafetyAlertStore, SafetyMonitor
 from .scheduler import LatestResults, Scheduler
 from .stream_registry import StreamRegistry
+from .synthesis import get_synthesizer
 from .task_store import TaskStore
+from .transcription import get_transcriber
 from .telegram_bot import TelegramBot
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +50,8 @@ if settings.mock_mode:
     stream_registry.seed_demo_streams(REPO_ROOT / "data")
 approval_store = ApprovalStore()
 orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store, debug_log)
+transcriber = get_transcriber(settings)
+synthesizer = get_synthesizer(settings)
 task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store, debug_log)
 latest_results = LatestResults()
 scheduler = Scheduler(task_store, task_agent, latest_results, settings.tick_seconds)
@@ -83,6 +87,8 @@ def status() -> dict:
     return {
         "mock_mode": settings.mock_mode,
         "tick_seconds": settings.tick_seconds,
+        "stt": transcriber.provider,
+        "tts": "gradium" if synthesizer is not None else "browser",
         "telegram_enabled": telegram.enabled,
         "console": True,
         "debug_log_path": debug_log.path,
@@ -132,6 +138,51 @@ class ChatResponse(BaseModel):
 def chat(request: ChatRequest) -> ChatResponse:
     reply = orchestrator.handle_message(request.message)
     return ChatResponse(reply=reply)
+
+
+class VoiceChatResponse(BaseModel):
+    transcript: str
+    reply: str
+
+
+@app.post("/api/chat/voice", response_model=VoiceChatResponse)
+async def chat_voice(file: UploadFile) -> VoiceChatResponse:
+    """Voice mode: transcribe a spoken clip, then run it through the SAME
+    orchestrator as typed chat. The transcript is returned alongside the reply
+    so the UI can show what was heard."""
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(400, "empty audio upload")
+    mime_type = file.content_type or "audio/wav"
+    try:
+        transcript = transcriber.transcribe(audio, mime_type).strip()
+    except Exception as exc:  # surface provider/network failures legibly in the UI
+        raise HTTPException(502, f"transcription failed: {exc}") from exc
+    if not transcript:
+        raise HTTPException(422, "no speech recognized")
+    reply = orchestrator.handle_message(transcript)
+    return VoiceChatResponse(transcript=transcript, reply=reply)
+
+
+class TTSRequest(BaseModel):
+    text: str
+
+
+@app.post("/api/tts")
+def tts(request: TTSRequest) -> Response:
+    """Synthesize the orchestrator's reply with Gradium and return raw audio.
+
+    Only available when a Gradium key + voice are configured; otherwise the
+    frontend speaks replies with the browser's own voice and never calls this."""
+    if synthesizer is None:
+        raise HTTPException(404, "gradium tts not configured")
+    if not request.text.strip():
+        raise HTTPException(400, "empty text")
+    try:
+        audio, mime_type = synthesizer.synthesize(request.text)
+    except Exception as exc:  # surface provider/network failures legibly in the UI
+        raise HTTPException(502, f"tts failed: {exc}") from exc
+    return Response(content=audio, media_type=mime_type, headers={"Cache-Control": "no-store"})
 
 
 # ---------------------------------------------------------------- tasks
