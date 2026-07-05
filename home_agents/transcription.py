@@ -78,7 +78,12 @@ class GradiumTranscriber:
             content=audio,
             timeout=self._timeout,
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            # Surface Gradium's own error text (auth, unsupported format, …)
+            # rather than a generic "HTTP 4xx", so the failure is diagnosable.
+            raise RuntimeError(
+                f"Gradium STT returned {response.status_code}: {response.text[:300]}"
+            )
         return _extract_transcript(response.text)
 
 

@@ -50,7 +50,12 @@ class GradiumSynthesizer:
             },
             timeout=self._timeout,
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            # Surface Gradium's own error text (bad voice id, auth, quota, …)
+            # rather than a generic "HTTP 4xx", so the failure is diagnosable.
+            raise RuntimeError(
+                f"Gradium TTS returned {response.status_code}: {response.text[:300]}"
+            )
         mime_type = response.headers.get("content-type", f"audio/{self._output_format}")
         return response.content, mime_type
 

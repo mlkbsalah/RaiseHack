@@ -328,7 +328,7 @@ async function sendVoice(blob) {
   form.append("file", blob, "voice.wav");
   try {
     const res = await fetch("/api/chat/voice", { method: "POST", body: form });
-    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 140)}`);
+    if (!res.ok) throw new Error(await errorDetail(res));
     const { transcript, reply } = await res.json();
     pending.textContent = transcript;
     addMessage("assistant", reply);
@@ -345,6 +345,23 @@ async function sendVoice(blob) {
 // voice. Any Gradium failure falls back to the browser rather than going silent.
 let gradiumTTS = false;
 
+// Pull a human-readable message out of a failed response, unwrapping FastAPI's
+// {"detail": ...} envelope so Gradium's own error text reaches the user.
+async function errorDetail(res) {
+  let body = "";
+  try {
+    body = await res.text();
+  } catch {
+    /* no body */
+  }
+  try {
+    body = JSON.parse(body).detail ?? body;
+  } catch {
+    /* not JSON */
+  }
+  return `${res.status} ${body}`.trim().slice(0, 240);
+}
+
 async function speak(text) {
   if (gradiumTTS) {
     try {
@@ -353,12 +370,15 @@ async function speak(text) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
-      if (!res.ok) throw new Error(`${res.status}`);
+      if (!res.ok) throw new Error(await errorDetail(res));
       const audio = new Audio(URL.createObjectURL(await res.blob()));
       await audio.play();
       return;
-    } catch {
-      // fall through to the browser voice
+    } catch (err) {
+      // Explicit, not silent: show why Gradium TTS failed, then fall back to
+      // the browser voice so the reply is still spoken.
+      console.error("Gradium TTS failed:", err);
+      addMessage("assistant", `⚠️ Gradium TTS failed — using the browser voice instead. (${err.message})`);
     }
   }
   browserSpeak(text);
