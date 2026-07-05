@@ -66,6 +66,7 @@ class Orchestrator:
         google_auth_url: str | None = None,
         google_configured: bool | None = None,
         google_account_email: str | None = None,
+        google_connected: bool | None = None,
     ) -> str:
         context = self._build_context()
         if google_configured is not None:
@@ -79,6 +80,7 @@ class Orchestrator:
             google_auth_url=google_auth_url,
             google_configured=google_configured,
             google_account_email=google_account_email,
+            google_connected=google_connected,
         )
 
     def _build_context(self) -> dict:
@@ -135,6 +137,7 @@ class Orchestrator:
         google_auth_url: str | None = None,
         google_configured: bool | None = None,
         google_account_email: str | None = None,
+        google_connected: bool | None = None,
     ) -> str:
         if reply.intent == "create_task" and reply.task is not None:
             return self._create_task(reply)
@@ -152,6 +155,7 @@ class Orchestrator:
                 google_auth_url,
                 google_configured,
                 google_account_email,
+                google_connected,
             )
         return reply.reply
 
@@ -233,12 +237,18 @@ class Orchestrator:
         google_auth_url: str | None,
         google_configured: bool | None,
         google_account_email: str | None,
+        google_connected: bool | None,
     ) -> str:
         if not google_account_email:
             return (
                 "Sure. What Gmail address should I connect? "
                 "Send it like: my Gmail is name@gmail.com. "
                 "I will never ask for your Google password."
+            )
+        if google_connected:
+            return (
+                f"Google is already connected for {google_account_email}. "
+                "You can ask me to add Google Tasks or Calendar events now."
             )
         if google_configured is False:
             return (

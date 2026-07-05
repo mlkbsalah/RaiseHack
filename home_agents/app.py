@@ -272,7 +272,11 @@ def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
             return ChatResponse(reply=f"I couldn't add that Google Task: {type(exc).__name__}: {exc}")
         return ChatResponse(reply=result)
     google_auth_url = None
-    if google_status_info["configured"] and google_status_info.get("account_email"):
+    if (
+        google_status_info["configured"]
+        and google_status_info.get("account_email")
+        and not google_status_info["connected"]
+    ):
         try:
             google_auth_url = google_actions.authorization_url(_google_redirect_uri(request))
         except Exception:
@@ -282,6 +286,7 @@ def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
         google_auth_url=google_auth_url,
         google_configured=google_status_info["configured"],
         google_account_email=google_status_info.get("account_email"),
+        google_connected=google_status_info["connected"],
     )
     return ChatResponse(reply=reply)
 
