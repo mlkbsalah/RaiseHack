@@ -174,9 +174,41 @@ def _extract_email(message: str) -> str | None:
     return match.group(0).lower() if match else None
 
 
+def _looks_like_google_account_setup(message: str) -> bool:
+    lower = message.lower()
+    account_terms = (
+        "google account",
+        "gmail account",
+        "gmail address",
+        "google email",
+        "connect google",
+        "add google",
+        "add gmail",
+    )
+    setup_terms = ("connect", "add", "use", "set", "save", "my")
+    return any(term in lower for term in account_terms) and any(
+        term in lower for term in setup_terms
+    )
+
+
 def _execute_google_action(plan: GoogleActionPlan, google_status_info: dict) -> ChatResponse:
     if not google_status_info["connected"]:
         summary = plan.summary or "that Google action"
+        if google_status_info.get("account_mismatch"):
+            return ChatResponse(
+                reply=(
+                    f"I can run {summary} after Google is reconnected with "
+                    f"{google_status_info.get('requested_account_email')}. "
+                    f"The current token is for {google_status_info.get('authenticated_account_email')}."
+                )
+            )
+        if google_status_info.get("needs_account_verification"):
+            return ChatResponse(
+                reply=(
+                    f"I can run {summary} after you reconnect Google once. "
+                    f"That verifies the token belongs to {google_status_info.get('requested_account_email')}."
+                )
+            )
         return ChatResponse(
             reply=(
                 f"I can run {summary} after Google is connected. "
@@ -206,8 +238,7 @@ def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
 
     message = chat_request.message
     email = _extract_email(message)
-    google_words = ("gmail", "google", "calendar", "tasks", "keep", "account", "email")
-    if email and any(word in message.lower() for word in google_words):
+    if email and _looks_like_google_account_setup(message):
         google_actions.save_account_email(email)
     google_status_info = google_actions.status()
     action_plan = google_action_planner.plan(

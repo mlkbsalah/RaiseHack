@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import re
 from email.message import EmailMessage
@@ -14,6 +15,9 @@ from .config import Settings
 from .models import ActionProposal
 
 GOOGLE_SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/tasks",
@@ -27,11 +31,26 @@ class GoogleWorkspaceActions:
 
     def status(self) -> dict[str, Any]:
         profile = self.account_profile()
+        requested_email = profile.get("requested_email") or profile.get("email")
+        authenticated_email = profile.get("authenticated_email")
+        token_exists = self._token_path.exists()
+        account_email = authenticated_email if token_exists and authenticated_email else requested_email or authenticated_email
+        mismatch = bool(
+            token_exists
+            and requested_email
+            and authenticated_email
+            and requested_email != authenticated_email
+        )
+        needs_account_verification = bool(token_exists and requested_email and not authenticated_email)
         return {
-            "account_email": profile.get("email"),
+            "account_email": account_email,
+            "requested_account_email": requested_email,
+            "authenticated_account_email": authenticated_email,
+            "account_mismatch": mismatch,
+            "needs_account_verification": needs_account_verification,
             "configured": self.settings.google_oauth_client_secrets is not None
             and self.settings.google_oauth_client_secrets.exists(),
-            "connected": self._token_path.exists(),
+            "connected": token_exists and not mismatch and not needs_account_verification,
             "client_secrets_path": str(self.settings.google_oauth_client_secrets)
             if self.settings.google_oauth_client_secrets
             else None,
@@ -57,8 +76,14 @@ class GoogleWorkspaceActions:
         email = email.strip().lower()
         if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
             raise ValueError("Enter a valid email address.")
+        profile = self.account_profile()
+        current_requested = profile.get("requested_email") or profile.get("email")
+        current_authenticated = profile.get("authenticated_email")
+        if self._token_path.exists() and email not in {current_requested, current_authenticated}:
+            self._token_path.unlink()
+            profile.pop("authenticated_email", None)
         self.settings.google_account_profile.parent.mkdir(parents=True, exist_ok=True)
-        profile = {**self.account_profile(), "email": email}
+        profile = {**profile, "requested_email": email, "email": email}
         self.settings.google_account_profile.write_text(json.dumps(profile, indent=2), encoding="utf-8")
         return profile
 
@@ -84,6 +109,22 @@ class GoogleWorkspaceActions:
         flow.fetch_token(code=code)
         self._token_path.parent.mkdir(parents=True, exist_ok=True)
         self._token_path.write_text(flow.credentials.to_json(), encoding="utf-8")
+        authenticated_email = self._email_from_id_token(getattr(flow.credentials, "id_token", None))
+        if authenticated_email:
+            profile = self.account_profile()
+            requested_email = profile.get("requested_email") or profile.get("email")
+            profile["authenticated_email"] = authenticated_email
+            profile["email"] = authenticated_email
+            self.settings.google_account_profile.parent.mkdir(parents=True, exist_ok=True)
+            self.settings.google_account_profile.write_text(
+                json.dumps(profile, indent=2), encoding="utf-8"
+            )
+            if requested_email and requested_email != authenticated_email:
+                self._token_path.unlink()
+                raise ValueError(
+                    "Connected Google account "
+                    f"{authenticated_email} does not match requested account {requested_email}."
+                )
 
     def execute(self, proposal: ActionProposal) -> str:
         if proposal.action_type is None:
@@ -139,6 +180,24 @@ class GoogleWorkspaceActions:
         if not creds.valid:
             raise RuntimeError("Google credentials are invalid. Reconnect Google from the web UI.")
         return creds
+
+    def _email_from_id_token(self, id_token: str | None) -> str | None:
+        if not id_token:
+            return None
+        parts = id_token.split(".")
+        if len(parts) < 2:
+            return None
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        try:
+            decoded = base64.urlsafe_b64decode(payload.encode("ascii"))
+            claims = json.loads(decoded.decode("utf-8"))
+        except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        email = claims.get("email")
+        if isinstance(email, str) and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            return email.lower()
+        return None
 
     def _service(self, creds, api: str, version: str):
         self._require_google_packages()

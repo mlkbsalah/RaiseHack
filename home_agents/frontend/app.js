@@ -399,6 +399,7 @@ async function refreshGoogleStatus() {
   const status = await api("/api/google/status");
   googleConnectBtn.disabled = false;
   googleStatusEl.classList.toggle("connected", Boolean(status.connected));
+  const accountEmail = status.authenticated_account_email || status.account_email;
   if (!status.configured) {
     googleConnectBtn.textContent = status.account_email ? "Finish setup" : "Add Gmail";
     googleStatusEl.textContent =
@@ -407,26 +408,59 @@ async function refreshGoogleStatus() {
         : "Start by adding your Gmail address. OAuth client setup is needed before real actions can run.";
     return;
   }
+  if (status.account_mismatch) {
+    googleConnectBtn.textContent = "Reconnect Google";
+    googleStatusEl.classList.remove("connected");
+    googleStatusEl.textContent =
+      `Google signed in as ${status.authenticated_account_email}, but this app is set for ${status.requested_account_email}. Click Reconnect Google to choose a different Gmail or reconnect the saved one.`;
+    return;
+  }
+  if (status.needs_account_verification) {
+    googleConnectBtn.textContent = "Reconnect Google";
+    googleStatusEl.classList.remove("connected");
+    googleStatusEl.textContent =
+      `Reconnect Google once so Home Agents can verify the account. You can enter a different Gmail before reconnecting.`;
+    return;
+  }
   googleConnectBtn.textContent = status.connected ? "Reconnect Google" : "Connect Google";
   googleStatusEl.textContent = status.connected
-    ? `Google connected${status.account_email ? ` for ${status.account_email}` : ""}. Approved structured actions can execute.`
+    ? `Google connected${accountEmail ? ` for ${accountEmail}` : ""}. Approved structured actions can execute.`
     : status.account_email
       ? `Gmail saved: ${status.account_email}. Ready to authorize Google.`
       : "Google configured. Add your Gmail address, then authorize Google.";
 }
 
+async function chooseGoogleAccount(status) {
+  const currentEmail = status.requested_account_email || status.account_email || "";
+  if (
+    !status.account_email ||
+    status.account_mismatch ||
+    status.needs_account_verification
+  ) {
+    const email = window.prompt(
+      "Which Gmail address should Home Agents connect?",
+      currentEmail
+    );
+    if (!email) return null;
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) return null;
+    if (normalizedEmail !== currentEmail) {
+      const saved = await api("/api/google/account", {
+        method: "POST",
+        body: JSON.stringify({ email: normalizedEmail }),
+      });
+      addMessage("assistant", `Saved ${saved.account_email}.`);
+      return saved;
+    }
+  }
+  return status;
+}
+
 googleConnectBtn.addEventListener("click", async () => {
   try {
     let status = await api("/api/google/status");
-    if (!status.account_email) {
-      const email = window.prompt("Which Gmail address should Home Agents connect?");
-      if (!email) return;
-      status = await api("/api/google/account", {
-        method: "POST",
-        body: JSON.stringify({ email }),
-      });
-      addMessage("assistant", `Saved ${status.account_email}.`);
-    }
+    status = await chooseGoogleAccount(status);
+    if (!status) return;
     if (!status.configured) {
       addMessage(
         "assistant",
