@@ -13,7 +13,6 @@ from __future__ import annotations
 import base64
 import re
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile
@@ -24,10 +23,11 @@ from pydantic import BaseModel
 from .agent_runner import TaskAgent
 from .approvals import ApprovalStore
 from .config import get_settings
+from .google_action_planner import GoogleActionPlanner
 from .google_actions import GoogleWorkspaceActions
 from .llm_client import LLMClient
 from .memory_store import MemoryStore
-from .models import ActionProposal, TaskUpdateDraft
+from .models import ActionProposal, GoogleActionPlan, TaskUpdateDraft
 from .orchestrator import Orchestrator
 from .scheduler import LatestResults, Scheduler
 from .stream_registry import StreamRegistry
@@ -47,11 +47,12 @@ if settings.mock_mode:
     stream_registry.seed_demo_streams(REPO_ROOT / "data")
 approval_store = ApprovalStore()
 google_actions = GoogleWorkspaceActions(settings)
+google_action_planner = GoogleActionPlanner(llm)
 orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store)
 task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store)
 latest_results = LatestResults()
 scheduler = Scheduler(task_store, task_agent, latest_results, settings.tick_seconds)
-pending_calendar_request: dict | None = None
+pending_google_action: GoogleActionPlan | None = None
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
@@ -119,191 +120,35 @@ def _extract_email(message: str) -> str | None:
     return match.group(0).lower() if match else None
 
 
-def _extract_google_task_title(message: str) -> str | None:
-    text = message.strip()
-    lower = text.lower()
-    if not any(term in lower for term in ("to do", "todo", "to-do", "google task", "tasks")):
-        return None
-    if not any(term in lower for term in ("add", "create", "put")):
-        return None
-    patterns = [
-        r"(?:add|create|put)\s+(?P<title>.+?)\s+(?:to|on|in)\s+(?:my\s+)?(?:gmail|google)?\s*(?:to[- ]?do\s+list|todo\s+list|tasks?)",
-        r"(?:add|create|put)\s+(?:to|on|in)\s+(?:my\s+)?(?:gmail|google)?\s*(?:to[- ]?do\s+list|todo\s+list|tasks?)\s+(?:that\s+)?(?P<title>.+)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            title = re.sub(r"^(that\s+)?i\s+(have|need)\s+to\s+", "", match.group("title").strip(), flags=re.IGNORECASE)
-            return title.strip(" .?!") or None
-    fallback = re.search(
-        r"(?:to[- ]?do\s+list|todo\s+list|tasks?).*?(?:that\s+)?i\s+(?:have|need)\s+to\s+(?P<title>.+)",
-        text,
-        flags=re.IGNORECASE,
-    )
-    if fallback:
-        return fallback.group("title").strip(" .?!") or None
-    return None
-
-
-def _extract_calendar_request(message: str) -> dict | None:
-    text = message.strip()
-    lower = text.lower()
-    if "calendar" not in lower and "meeting" not in lower:
-        return None
-    if not any(term in lower for term in ("add", "create", "schedule", "put")):
-        return None
-
-    title = "Meeting" if "meeting" in lower else "Appointment"
-    title_match = re.search(
-        r"(?:meeting|event)\s+(?:with|about)\s+(?P<title>.+?)(?:\s+(?:today|tomorrow|on|at)\b|$)",
-        text,
-        flags=re.IGNORECASE,
-    )
-    if title_match:
-        title = f"Meeting with {title_match.group('title').strip(' .?!')}"
-    elif "manager" in lower:
-        title = "Meeting with manager"
-
-    date = _extract_calendar_date(text)
-    start = _extract_calendar_start(text)
-    if start is None:
-        return {"title": title, "date": date.isoformat() if date else None, "needs_time": True}
-    end = start + timedelta(hours=1)
-    return {
-        "title": title,
-        "start": start.isoformat(timespec="seconds"),
-        "end": end.isoformat(timespec="seconds"),
-        "timezone": "Europe/Paris",
-    }
-
-
-def _extract_calendar_date(message: str):
-    lower = message.lower()
-    date = None
-    now = datetime.now().replace(second=0, microsecond=0)
-    if "tomorrow" in lower:
-        date = now.date() + timedelta(days=1)
-    elif "today" in lower:
-        date = now.date()
-    explicit_date = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", lower)
-    if explicit_date:
-        date = datetime(
-            int(explicit_date.group(1)),
-            int(explicit_date.group(2)),
-            int(explicit_date.group(3)),
-        ).date()
-    weekdays = {
-        "monday": 0,
-        "tuesday": 1,
-        "wednesday": 2,
-        "thursday": 3,
-        "friday": 4,
-        "saturday": 5,
-        "sunday": 6,
-    }
-    for name, weekday in weekdays.items():
-        if name in lower:
-            days = (weekday - now.date().weekday()) % 7
-            if days == 0:
-                days = 7
-            date = now.date() + timedelta(days=days)
-            break
-    return date
-
-
-def _extract_calendar_time(message: str) -> tuple[int, int] | None:
-    lower = message.lower()
-    time_match = re.search(r"\b(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", lower)
-    if time_match is None:
-        return None
-    hour = int(time_match.group(1))
-    minute = int(time_match.group(2) or "0")
-    suffix = time_match.group(3)
-    if suffix == "pm" and hour < 12:
-        hour += 12
-    if suffix == "am" and hour == 12:
-        hour = 0
-    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
-        return None
-    return hour, minute
-
-
-def _extract_calendar_start(message: str) -> datetime | None:
-    date = _extract_calendar_date(message)
-    time_value = _extract_calendar_time(message)
-    if date is None or time_value is None:
-        return None
-    hour, minute = time_value
-    return datetime.combine(date, datetime.min.time()).replace(hour=hour, minute=minute)
-
-
-def _complete_pending_calendar_request(message: str) -> dict | None:
-    global pending_calendar_request
-
-    if pending_calendar_request is None:
-        return None
-    date = _extract_calendar_date(message)
-    if date is None and pending_calendar_request.get("date"):
-        date = datetime.fromisoformat(pending_calendar_request["date"]).date()
-    time_value = _extract_calendar_time(message)
-    if time_value is None and pending_calendar_request.get("time"):
-        hour, minute = pending_calendar_request["time"].split(":", 1)
-        time_value = int(hour), int(minute)
-    if date is None and time_value is not None:
-        hour, minute = time_value
-        pending_calendar_request["time"] = f"{hour:02d}:{minute:02d}"
-        return {"needs_date": True, "title": pending_calendar_request["title"]}
-    if date is not None and time_value is None:
-        pending_calendar_request["date"] = date.isoformat()
-        return {"needs_time": True, "title": pending_calendar_request["title"]}
-    if date is None or time_value is None:
-        return {"needs_datetime": True, "title": pending_calendar_request["title"]}
-    hour, minute = time_value
-    start = datetime.combine(date, datetime.min.time()).replace(hour=hour, minute=minute)
-    end = start + timedelta(hours=1)
-    completed = {
-        "title": pending_calendar_request["title"],
-        "start": start.isoformat(timespec="seconds"),
-        "end": end.isoformat(timespec="seconds"),
-        "timezone": pending_calendar_request.get("timezone", "Europe/Paris"),
-    }
-    pending_calendar_request = None
-    return completed
-
-
-def _execute_calendar_request(calendar_request: dict, google_status_info: dict) -> ChatResponse:
+def _execute_google_action(plan: GoogleActionPlan, google_status_info: dict) -> ChatResponse:
     if not google_status_info["connected"]:
+        summary = plan.summary or "that Google action"
         return ChatResponse(
             reply=(
-                f"I can add '{calendar_request['title']}' to Google Calendar after Google is connected. "
+                f"I can run {summary} after Google is connected. "
                 "Click Connect Google first."
             )
         )
+    if plan.action_type is None:
+        return ChatResponse(reply="I could not determine which Google action to run.")
     try:
         result = google_actions.execute(
             ActionProposal(
-                action=f"Create Google Calendar event: {calendar_request['title']}",
+                action=plan.summary or f"Run Google action: {plan.action_type}",
                 reason="Direct user request from chat.",
                 risk="low",
-                action_type="create_calendar_event",
-                action_payload={
-                    "summary": calendar_request["title"],
-                    "start": calendar_request["start"],
-                    "end": calendar_request["end"],
-                    "timezone": calendar_request["timezone"],
-                    "attendees": [],
-                    "create_meet": True,
-                },
+                action_type=plan.action_type,
+                action_payload=plan.action_payload,
             )
         )
     except Exception as exc:
-        return ChatResponse(reply=f"I couldn't add that calendar event: {type(exc).__name__}: {exc}")
+        return ChatResponse(reply=f"I couldn't run that Google action: {type(exc).__name__}: {exc}")
     return ChatResponse(reply=result)
 
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
-    global pending_calendar_request
+    global pending_google_action
 
     message = chat_request.message
     email = _extract_email(message)
@@ -311,73 +156,25 @@ def chat(chat_request: ChatRequest, request: Request) -> ChatResponse:
     if email and any(word in message.lower() for word in google_words):
         google_actions.save_account_email(email)
     google_status_info = google_actions.status()
-    pending_completed = _complete_pending_calendar_request(message)
-    if pending_completed:
-        if pending_completed.get("needs_date"):
+    action_plan = google_action_planner.plan(
+        message,
+        pending=pending_google_action,
+        timezone="Europe/Paris",
+    )
+    if action_plan.is_google_action:
+        if action_plan.missing_fields:
+            pending_google_action = action_plan
             return ChatResponse(
-                reply=(
-                    f"I have the time for '{pending_completed['title']}'. "
-                    "What date should I use? For example: tomorrow or Monday."
-                )
+                reply=action_plan.clarification_question
+                or "I need one more detail before I can run that Google action."
             )
-        if pending_completed.get("needs_time"):
-            return ChatResponse(
-                reply=(
-                    f"I still need a time for '{pending_completed['title']}'. "
-                    "For example: 3pm."
-                )
-            )
-        if pending_completed.get("needs_datetime"):
-            return ChatResponse(
-                reply=(
-                    f"I still need a date and time for '{pending_completed['title']}'. "
-                    "For example: tomorrow at 3pm."
-                )
-            )
-        return _execute_calendar_request(pending_completed, google_status_info)
-    calendar_request = _extract_calendar_request(message)
-    if calendar_request:
-        if calendar_request.get("needs_time"):
-            pending_calendar_request = {
-                "title": calendar_request["title"],
-                "date": calendar_request.get("date"),
-                "timezone": "Europe/Paris",
-            }
-            prompt = (
-                f"I can add '{calendar_request['title']}' to Google Calendar. "
-                "What time should I use? For example: 3pm."
-                if calendar_request.get("date")
-                else (
-                    f"I can add '{calendar_request['title']}' to Google Calendar. "
-                    "What date and time should I use? For example: tomorrow at 3pm."
-                )
-            )
-            return ChatResponse(
-                reply=prompt
-            )
-        return _execute_calendar_request(calendar_request, google_status_info)
-    google_task_title = _extract_google_task_title(message)
-    if google_task_title:
-        if not google_status_info["connected"]:
-            return ChatResponse(
-                reply=(
-                    f"I can add '{google_task_title}' to Google Tasks after Google is connected. "
-                    "Click Connect Google first."
-                )
-            )
-        try:
-            result = google_actions.execute(
-                ActionProposal(
-                    action=f"Create Google Task: {google_task_title}",
-                    reason="Direct user request from chat.",
-                    risk="low",
-                    action_type="create_task",
-                    action_payload={"title": google_task_title},
-                )
-            )
-        except Exception as exc:
-            return ChatResponse(reply=f"I couldn't add that Google Task: {type(exc).__name__}: {exc}")
-        return ChatResponse(reply=result)
+        pending_google_action = None
+        return _execute_google_action(action_plan, google_status_info)
+    if pending_google_action is not None:
+        return ChatResponse(
+            reply=pending_google_action.clarification_question
+            or "I still need one more detail before I can run that Google action."
+        )
     google_auth_url = None
     if (
         google_status_info["configured"]

@@ -108,6 +108,17 @@ class ActionProposal(SerializableModel):
     action_payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class GoogleActionPlan(SerializableModel):
+    """Structured plan for a direct Google Workspace chat request."""
+
+    is_google_action: bool
+    action_type: GoogleActionType | None = None
+    action_payload: dict[str, Any] = Field(default_factory=dict)
+    missing_fields: list[str] = Field(default_factory=list)
+    clarification_question: str | None = None
+    summary: str | None = None
+
+
 class AgentObservation(SerializableModel):
     summary: str
     anomaly_detected: bool
