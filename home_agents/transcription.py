@@ -116,12 +116,14 @@ def _extract_transcript(ndjson: str) -> str:
 
 
 def get_transcriber(settings: Settings) -> Transcriber:
-    """Pick a transcriber the same way the rest of the app picks mock vs live.
+    """Pick the transcriber by whether a Gradium key is configured.
 
-    Mock mode, or simply the absence of a Gradium key, yields the offline
-    ``MockTranscriber`` so the voice button always works; a configured key
-    yields the real Gradium provider.
+    A present key *is* the signal to use real speech-to-text, so it wins even
+    in ``HOME_AGENTS_MOCK`` mode — that lets you test live voice input against
+    an otherwise-mock system (real transcript -> mock keyword orchestrator), no
+    Crusoe key required. With no key, the offline ``MockTranscriber`` keeps the
+    voice button working, exactly like mock mode everywhere else.
     """
-    if settings.mock_mode or not settings.gradium_api_key:
-        return MockTranscriber()
-    return GradiumTranscriber(settings.gradium_api_key, settings.stt_language)
+    if settings.gradium_api_key:
+        return GradiumTranscriber(settings.gradium_api_key, settings.stt_language)
+    return MockTranscriber()

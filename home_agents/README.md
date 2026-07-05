@@ -54,12 +54,16 @@ orchestrator's answer read back aloud.
 
 Speech-to-text is done by [Gradium](https://gradium.ai): the browser records a
 mono WAV, posts it to `POST /api/chat/voice`, and the server forwards the bytes
-to Gradium's pre-recorded STT endpoint (`transcription.py`). Set
-`GRADIUM_API_KEY` to turn it on. **Without a key (or in mock mode) voice mode
-still works** — a `MockTranscriber` returns the canned tap command so the whole
-voice → transcript → task loop is demoable offline, exactly like the rest of
-`HOME_AGENTS_MOCK`. Reply speech uses the browser's built-in `speechSynthesis`,
-so no second service or key is needed for the talk-back half.
+to Gradium's pre-recorded STT endpoint (`transcription.py`). **Just set
+`GRADIUM_API_KEY` in `home_agents/.env` and restart** — that's the only thing
+required, and the key is honoured even in `HOME_AGENTS_MOCK` mode, so you can
+test real voice input against an otherwise-mock system (real transcript → mock
+keyword orchestrator) without a Crusoe key. Confirm it's live at
+`/api/status` (`"stt": "gradium"`). **Without a key, voice mode still works** —
+a `MockTranscriber` returns the canned tap command so the whole voice →
+transcript → task loop is demoable offline. Reply speech uses the browser's
+built-in `speechSynthesis`, so no second service or key is needed for the
+talk-back half.
 
 Provider is pluggable behind the `Transcriber` protocol in `transcription.py`;
 swapping Gradium for another STT service is a single new class. Note that a
