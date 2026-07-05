@@ -15,6 +15,7 @@ between runs.
 from __future__ import annotations
 
 from time import time
+from typing import Any
 
 from .approvals import ApprovalStore
 from .llm_client import LLMClient, schema_instruction, validate_json
@@ -64,6 +65,9 @@ class TaskAgent:
         self.memory = memory
         self.streams = streams
         self.approvals = approvals
+        # Set by app.py once the optional Telegram bridge exists; see orchestrator.py
+        # for why this is duck-typed instead of importing TelegramBot directly.
+        self.telegram: Any | None = None
 
     def run(self, task: TaskSpec) -> AgentRunResult:
         agent_memory = self.memory.read_agent_memory(task.task_id, task.title)
@@ -83,6 +87,8 @@ class TaskAgent:
         if observation.action_proposal is not None:
             approval = self.approvals.create(task.task_id, task.title, observation.action_proposal)
             pending_id = approval.approval_id
+            if self.telegram is not None:
+                self.telegram.notify_approval_created(approval)
 
         return AgentRunResult(
             task_id=task.task_id,

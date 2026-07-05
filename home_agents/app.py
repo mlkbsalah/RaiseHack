@@ -29,6 +29,7 @@ from .orchestrator import Orchestrator
 from .scheduler import LatestResults, Scheduler
 from .stream_registry import StreamRegistry
 from .task_store import TaskStore
+from .telegram_bot import TelegramBot
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
@@ -47,12 +48,17 @@ orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store)
 task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store)
 latest_results = LatestResults()
 scheduler = Scheduler(task_store, task_agent, latest_results, settings.tick_seconds)
+telegram = TelegramBot(settings, orchestrator, task_store, approval_store, scheduler, memory_store)
+orchestrator.telegram = telegram
+task_agent.telegram = telegram
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     scheduler.start()
+    telegram.start()
     yield
     scheduler.stop()
+    telegram.stop()
 
 
 app = FastAPI(title="Home Agents", lifespan=_lifespan)
@@ -66,7 +72,11 @@ def index() -> FileResponse:
 
 @app.get("/api/status")
 def status() -> dict:
-    return {"mock_mode": settings.mock_mode, "tick_seconds": settings.tick_seconds}
+    return {
+        "mock_mode": settings.mock_mode,
+        "tick_seconds": settings.tick_seconds,
+        "telegram_enabled": telegram.enabled,
+    }
 
 
 # ---------------------------------------------------------------- chat
@@ -182,6 +192,7 @@ def decide_approval(approval_id: str, decision: ApprovalDecision) -> dict:
         approval.task_title,
         f"User {'approved' if decision.approve else 'denied'} proposed action: {approval.action}",
     )
+    telegram.notify_approval_resolved(approval, origin="web")
     return approval.as_dict()
 
 

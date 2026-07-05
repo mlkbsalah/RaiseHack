@@ -28,10 +28,18 @@ class Settings:
     stream_ttl_seconds: float
     host: str
     port: int
+    telegram_bot_token: str | None
+    telegram_allowed_chat_ids: frozenset[int]
 
 
 def _truthy(value: str | None) -> bool:
     return value is not None and value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_chat_ids(value: str | None) -> frozenset[int]:
+    if not value:
+        return frozenset()
+    return frozenset(int(part) for part in value.split(",") if part.strip())
 
 
 def get_settings() -> Settings:
@@ -54,4 +62,6 @@ def get_settings() -> Settings:
         stream_ttl_seconds=float(os.environ.get("HOME_AGENTS_STREAM_TTL", "12")),
         host=os.environ.get("HOME_AGENTS_HOST", "127.0.0.1"),
         port=int(os.environ.get("HOME_AGENTS_PORT", "8000")),
+        telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN") or None,
+        telegram_allowed_chat_ids=_parse_chat_ids(os.environ.get("TELEGRAM_ALLOWED_CHAT_IDS")),
     )
