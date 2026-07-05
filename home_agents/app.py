@@ -34,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 
 settings = get_settings()
-debug_log = DebugLog(settings.debug)
+debug_log = DebugLog(settings.data_dir)
 llm = LLMClient(settings)
 task_store = TaskStore(settings)
 memory_store = MemoryStore(settings, debug_log)
@@ -70,19 +70,37 @@ def status() -> dict:
     return {
         "mock_mode": settings.mock_mode,
         "tick_seconds": settings.tick_seconds,
-        "debug": settings.debug,
+        "console": True,
+        "debug_log_path": debug_log.path,
     }
 
 
 @app.get("/api/debug/log")
 def debug_events(after: int = 0) -> dict:
-    """Tail of the in-memory debug log (orchestrator decisions + memory writes).
-
-    Only serves data when the app is started with HOME_AGENTS_DEBUG=true;
-    otherwise the debug panel stays hidden and this returns nothing."""
-    if not settings.debug:
-        raise HTTPException(404, "debug mode is off")
+    """Tail of the in-memory console log for this server session."""
     return {"events": debug_log.recent(after)}
+
+
+@app.get("/api/debug/memory")
+def debug_memory() -> dict:
+    """Current memory tails shown in the bottom console."""
+    agents = [
+        {
+            "task_id": task.task_id,
+            "title": task.title,
+            "status": task.status,
+            "memory": memory_store.read_agent_memory(task.task_id, task.title),
+        }
+        for task in task_store.list()
+    ]
+    subjects = [
+        {
+            "subject_id": subject_id,
+            "memory": memory_store.read_subject_memory(subject_id),
+        }
+        for subject_id in memory_store.list_subjects()
+    ]
+    return {"agents": agents, "subjects": subjects}
 
 
 # ---------------------------------------------------------------- chat
@@ -225,7 +243,10 @@ def upload_image(stream_id: str, upload: ImageUpload) -> dict:
         data = base64.b64decode(encoded)
     except (ValueError, IndexError) as exc:
         raise HTTPException(400, f"invalid data url: {exc}") from exc
-    stream_registry.put(stream_id, "image", mime_type, data)
+    try:
+        stream_registry.put(stream_id, "image", mime_type, data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {"stream_id": stream_id, "kind": "image", "bytes": len(data)}
 
 
@@ -233,7 +254,10 @@ def upload_image(stream_id: str, upload: ImageUpload) -> dict:
 async def upload_audio(stream_id: str, file: UploadFile) -> dict:
     data = await file.read()
     mime_type = file.content_type or "audio/webm"
-    stream_registry.put(stream_id, "audio", mime_type, data)
+    try:
+        stream_registry.put(stream_id, "audio", mime_type, data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {"stream_id": stream_id, "kind": "audio", "bytes": len(data)}
 
 

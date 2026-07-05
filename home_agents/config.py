@@ -23,7 +23,6 @@ class Settings:
     multimodal_model: str
     reasoning_model: str
     mock_mode: bool
-    debug: bool
     data_dir: Path
     tick_seconds: float
     stream_ttl_seconds: float
@@ -50,7 +49,6 @@ def get_settings() -> Settings:
             "CRUSOE_REASONING_MODEL", "deepseek-ai/Deepseek-V4-Flash"
         ),
         mock_mode=_truthy(os.environ.get("HOME_AGENTS_MOCK")),
-        debug=_truthy(os.environ.get("HOME_AGENTS_DEBUG")),
         data_dir=data_dir,
         tick_seconds=float(os.environ.get("HOME_AGENTS_TICK_SECONDS", "5")),
         stream_ttl_seconds=float(os.environ.get("HOME_AGENTS_STREAM_TTL", "12")),

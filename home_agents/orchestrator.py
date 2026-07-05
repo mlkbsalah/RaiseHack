@@ -57,7 +57,7 @@ class Orchestrator:
         self.task_store = task_store
         self.stream_registry = stream_registry
         self.memory_store = memory_store
-        self.debug = debug or DebugLog(enabled=False)
+        self.debug = debug or DebugLog()
 
     def handle_message(self, message: str) -> str:
         context = self._build_context()

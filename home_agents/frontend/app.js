@@ -7,7 +7,13 @@ const streamCardsEl = document.getElementById("stream-cards");
 const addStreamBtn = document.getElementById("add-stream-btn");
 const modeBadge = document.getElementById("mode-badge");
 const debugPanel = document.getElementById("debug-panel");
+const debugToggleBtn = document.getElementById("debug-toggle");
+const debugSessionEl = document.getElementById("debug-session");
+const debugTabs = document.querySelectorAll("[data-debug-tab]");
+const debugLogView = document.getElementById("debug-log-view");
+const debugMemoryView = document.getElementById("debug-memory-view");
 const debugLogEl = document.getElementById("debug-log");
+const debugMemoryEl = document.getElementById("debug-memory");
 const debugClearBtn = document.getElementById("debug-clear");
 
 async function api(path, options) {
@@ -214,23 +220,24 @@ async function refreshStreams() {
 async function refreshStatus() {
   const status = await api("/api/status");
   modeBadge.textContent = status.mock_mode ? "mock mode" : "live mode";
-  if (status.debug) startDebug();
+  startDebug(status);
 }
 
-// ---------- debug panel: live trace of orchestrator + memory writes ----------
+// ---------- agent console: live trace + current memory tails ----------
 //
-// Only wired up when /api/status reports debug mode. We poll /api/debug/log for
-// events newer than the last sequence number we've seen and append them, so the
-// panel reads like a rolling console of what the orchestrator decided and what
-// each agent run wrote to memory. Dynamic text is set via textContent (never
-// innerHTML) since it echoes user messages back.
+// This console is always available. It polls /api/debug/log for human-readable
+// events newer than the last sequence number we've seen, and /api/debug/memory
+// for the current tails of agent and subject memory files. Dynamic text is set
+// via textContent since it can echo user messages and memory contents back.
 
 let debugSeq = 0;
 let debugStarted = false;
+let activeDebugTab = "log";
 
 function appendDebugEntry(ev) {
   const entry = document.createElement("div");
-  entry.className = `debug-entry cat-${ev.category}`;
+  const safeCategory = String(ev.category || "event").replace(/[^a-z0-9_-]/gi, "-");
+  entry.className = `debug-entry cat-${safeCategory}`;
 
   const meta = document.createElement("div");
   meta.className = "debug-meta";
@@ -257,12 +264,7 @@ function appendDebugEntry(ev) {
 }
 
 async function refreshDebug() {
-  let data;
-  try {
-    data = await api(`/api/debug/log?after=${debugSeq}`);
-  } catch {
-    return; // debug turned off or server restarted without it; leave panel as-is
-  }
+  const data = await api(`/api/debug/log?after=${debugSeq}`);
   if (!data.events.length) return;
   const nearBottom =
     debugLogEl.scrollHeight - debugLogEl.scrollTop - debugLogEl.clientHeight < 40;
@@ -274,19 +276,95 @@ async function refreshDebug() {
   if (nearBottom) debugLogEl.scrollTop = debugLogEl.scrollHeight;
 }
 
-function startDebug() {
+function memoryCard(kind, title, subtitle, memory) {
+  const card = document.createElement("div");
+  card.className = "memory-card";
+
+  const head = document.createElement("div");
+  head.className = "memory-card-head";
+  const kindEl = document.createElement("span");
+  kindEl.className = "memory-kind";
+  kindEl.textContent = kind;
+  const titleEl = document.createElement("strong");
+  titleEl.textContent = title;
+  const subEl = document.createElement("span");
+  subEl.className = "hint";
+  subEl.textContent = subtitle;
+  head.append(kindEl, titleEl, subEl);
+
+  const body = document.createElement("pre");
+  body.textContent = memory.trim() || "(empty)";
+  card.append(head, body);
+  return card;
+}
+
+async function refreshMemory() {
+  const data = await api("/api/debug/memory");
+  debugMemoryEl.innerHTML = "";
+  if (!data.agents.length && !data.subjects.length) {
+    const empty = document.createElement("div");
+    empty.className = "debug-empty";
+    empty.textContent = "No task or subject memory yet.";
+    debugMemoryEl.appendChild(empty);
+    return;
+  }
+  for (const agent of data.agents) {
+    debugMemoryEl.appendChild(
+      memoryCard("agent", agent.title, agent.status, agent.memory)
+    );
+  }
+  for (const subject of data.subjects) {
+    debugMemoryEl.appendChild(
+      memoryCard("subject", subject.subject_id, "shared memory", subject.memory)
+    );
+  }
+}
+
+function selectDebugTab(tab) {
+  activeDebugTab = tab;
+  debugTabs.forEach((btn) => {
+    const active = btn.dataset.debugTab === tab;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  debugLogView.classList.toggle("active", tab === "log");
+  debugMemoryView.classList.toggle("active", tab === "memory");
+  debugClearBtn.style.display = tab === "log" ? "inline-block" : "none";
+  if (tab === "memory") refreshMemory().catch(() => {});
+}
+
+function setConsoleCollapsed(collapsed) {
+  debugPanel.classList.toggle("collapsed", collapsed);
+  debugToggleBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  debugToggleBtn.textContent = collapsed ? "Console" : "Collapse";
+  debugToggleBtn.title = collapsed ? "Expand console" : "Collapse console";
+}
+
+function startDebug(status = {}) {
   if (debugStarted) return;
   debugStarted = true;
-  debugPanel.hidden = false;
+  if (status.debug_log_path) {
+    const sessionName = status.debug_log_path.split("/").pop();
+    debugSessionEl.textContent = `Persisting session log: ${sessionName}`;
+  }
   const empty = document.createElement("div");
   empty.className = "debug-empty";
   empty.textContent = "Waiting for activity — send a message or run a task.";
   debugLogEl.appendChild(empty);
+  debugToggleBtn.addEventListener("click", () => {
+    setConsoleCollapsed(!debugPanel.classList.contains("collapsed"));
+  });
+  debugTabs.forEach((btn) =>
+    btn.addEventListener("click", () => selectDebugTab(btn.dataset.debugTab))
+  );
   debugClearBtn.addEventListener("click", () => {
     debugLogEl.innerHTML = ""; // clears the view only; server keeps its buffer
   });
-  refreshDebug();
-  setInterval(refreshDebug, 2000);
+  refreshDebug().catch(() => {});
+  refreshMemory().catch(() => {});
+  selectDebugTab(activeDebugTab);
+  setInterval(() => refreshDebug().catch(() => {}), 2000);
+  setInterval(() => refreshMemory().catch(() => {}), 4000);
 }
 
 // ---------- multi-stream live capture: each stream = camera + voice ----------

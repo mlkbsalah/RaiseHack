@@ -40,19 +40,18 @@ HOME_AGENTS_PORT=8000
 HOME_AGENTS_TICK_SECONDS=5
 HOME_AGENTS_STREAM_TTL=12   # seconds a live stream may go quiet before it's
                             # treated as closed and dropped from the live view
-HOME_AGENTS_DEBUG=false     # true reveals the in-app debug log panel
 ```
 
 `HOME_AGENTS_MOCK=true` runs the whole system — orchestrator, scheduler,
 agents — without ever calling Crusoe, using keyword heuristics and canned
 observations instead. This is the fastest way to see the full loop.
 
-`HOME_AGENTS_DEBUG=true` adds a **Debug log** panel to the bottom of the UI: a
-live trace of what the orchestrator decided for each message, what each agent
-run observed, and every write to agent/subject memory — colour-coded by source.
-It's polled from an in-memory ring buffer (`/api/debug/log`); with debug off the
-panel stays hidden and the endpoint returns 404, so it costs nothing in normal
-use. Combine it with `HOME_AGENTS_MOCK=true` to watch the memory files fill up.
+The UI always includes a collapsible **Agent console** at the bottom. Its Log
+tab shows a human-readable live trace of orchestrator decisions, agent
+observations, and memory writes; its Memory tab shows current tails of each
+agent and subject memory file. Log events are kept in an in-memory ring buffer
+for polling (`/api/debug/log`) and persisted as JSONL session files under
+`HOME_AGENTS_DATA_DIR/debug_sessions/`.
 
 ## Run it
 

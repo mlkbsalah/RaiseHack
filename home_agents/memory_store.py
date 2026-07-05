@@ -32,7 +32,7 @@ class MemoryStore:
         self._subjects_dir = settings.data_dir / "memory" / "subjects"
         self._agents_dir.mkdir(parents=True, exist_ok=True)
         self._subjects_dir.mkdir(parents=True, exist_ok=True)
-        self._debug = debug or DebugLog(enabled=False)
+        self._debug = debug or DebugLog()
 
     def _agent_path(self, task_id: str) -> Path:
         return self._agents_dir / f"{task_id}.md"

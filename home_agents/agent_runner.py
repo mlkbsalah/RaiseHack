@@ -49,6 +49,9 @@ _SYSTEM_PROMPT = (
     "certainty than the evidence in the provided data streams supports; "
     "missing or ambiguous evidence should lower confidence and set "
     "anomaly_detected to false rather than produce a confident claim. "
+    "Memory is historical context only: never report that something is "
+    "present in this run unless it is visible or audible in the current "
+    "data streams. "
     + schema_instruction("AgentObservation", _OBSERVATION_SCHEMA)
 )
 
@@ -66,7 +69,7 @@ class TaskAgent:
         self.memory = memory
         self.streams = streams
         self.approvals = approvals
-        self.debug = debug or DebugLog(enabled=False)
+        self.debug = debug or DebugLog()
 
     def run(self, task: TaskSpec) -> AgentRunResult:
         agent_memory = self.memory.read_agent_memory(task.task_id, task.title)
@@ -82,7 +85,22 @@ class TaskAgent:
             f"connected streams: {', '.join(connected) or 'none'}",
         )
 
-        if self.llm.settings.mock_mode:
+        if not task.streams:
+            observation = AgentObservation(
+                summary=(
+                    "No data streams are attached to this task yet; nothing can be "
+                    "observed for this run."
+                ),
+                anomaly_detected=False,
+                confidence=0.0,
+            )
+        elif not connected:
+            observation = AgentObservation(
+                summary="No connected data streams are available right now; nothing can be observed.",
+                anomaly_detected=False,
+                confidence=0.0,
+            )
+        elif self.llm.settings.mock_mode:
             observation = self._mock_observation(task, payloads)
         else:
             observation = self._live_observation(task, agent_memory, subject_memory, payloads)
