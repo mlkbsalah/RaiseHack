@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+client_secret*.json
+google-oauth-client.json
 tap_agent/.env
 tap_agent/.env.*
 !tap_agent/.env.example
