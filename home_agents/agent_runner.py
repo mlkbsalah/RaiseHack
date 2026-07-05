@@ -17,6 +17,7 @@ from __future__ import annotations
 from time import time
 
 from .approvals import ApprovalStore
+from .debug_log import DebugLog
 from .llm_client import LLMClient, schema_instruction, validate_json
 from .memory_store import MemoryStore
 from .models import ActionProposal, AgentObservation, AgentRunResult, TaskSpec
@@ -59,11 +60,13 @@ class TaskAgent:
         memory: MemoryStore,
         streams: StreamRegistry,
         approvals: ApprovalStore,
+        debug: DebugLog | None = None,
     ) -> None:
         self.llm = llm
         self.memory = memory
         self.streams = streams
         self.approvals = approvals
+        self.debug = debug or DebugLog(enabled=False)
 
     def run(self, task: TaskSpec) -> AgentRunResult:
         agent_memory = self.memory.read_agent_memory(task.task_id, task.title)
@@ -71,12 +74,24 @@ class TaskAgent:
             self.memory.read_subject_memory(task.subject_id) if task.subject_id else ""
         )
         payloads = [self.streams.get_payload(s.stream_id, s.kind) for s in task.streams]
+        connected = [p.stream_id for p in payloads if p.connected]
+        self.debug.emit(
+            "agent",
+            f"run: {task.title}",
+            f"looking for: {task.focus}\n"
+            f"connected streams: {', '.join(connected) or 'none'}",
+        )
 
         if self.llm.settings.mock_mode:
             observation = self._mock_observation(task, payloads)
         else:
             observation = self._live_observation(task, agent_memory, subject_memory, payloads)
 
+        self.debug.emit(
+            "agent",
+            f"{task.title}: {observation.summary}",
+            self._observation_detail(observation),
+        )
         self._record(task, observation)
 
         pending_id = None
@@ -90,6 +105,22 @@ class TaskAgent:
             observation=observation,
             pending_approval_id=pending_id,
         )
+
+    def _observation_detail(self, observation: AgentObservation) -> str:
+        lines = [f"confidence: {observation.confidence:.2f}"]
+        if observation.anomaly_detected:
+            lines.append(f"ANOMALY: {observation.anomaly_description or 'unspecified'}")
+        else:
+            lines.append("anomaly: none")
+        if observation.subject_findings:
+            lines.append("subject findings:")
+            lines += [f"  - {f}" for f in observation.subject_findings]
+        if observation.action_proposal is not None:
+            proposal = observation.action_proposal
+            lines.append(
+                f"proposed action ({proposal.risk} risk): {proposal.action} — {proposal.reason}"
+            )
+        return "\n".join(lines)
 
     def _record(self, task: TaskSpec, observation: AgentObservation) -> None:
         pieces = [observation.summary]

@@ -6,6 +6,9 @@ const streamGallery = document.getElementById("stream-gallery");
 const streamCardsEl = document.getElementById("stream-cards");
 const addStreamBtn = document.getElementById("add-stream-btn");
 const modeBadge = document.getElementById("mode-badge");
+const debugPanel = document.getElementById("debug-panel");
+const debugLogEl = document.getElementById("debug-log");
+const debugClearBtn = document.getElementById("debug-clear");
 
 async function api(path, options) {
   const res = await fetch(path, {
@@ -211,6 +214,79 @@ async function refreshStreams() {
 async function refreshStatus() {
   const status = await api("/api/status");
   modeBadge.textContent = status.mock_mode ? "mock mode" : "live mode";
+  if (status.debug) startDebug();
+}
+
+// ---------- debug panel: live trace of orchestrator + memory writes ----------
+//
+// Only wired up when /api/status reports debug mode. We poll /api/debug/log for
+// events newer than the last sequence number we've seen and append them, so the
+// panel reads like a rolling console of what the orchestrator decided and what
+// each agent run wrote to memory. Dynamic text is set via textContent (never
+// innerHTML) since it echoes user messages back.
+
+let debugSeq = 0;
+let debugStarted = false;
+
+function appendDebugEntry(ev) {
+  const entry = document.createElement("div");
+  entry.className = `debug-entry cat-${ev.category}`;
+
+  const meta = document.createElement("div");
+  meta.className = "debug-meta";
+  const time = document.createElement("span");
+  time.className = "debug-time";
+  time.textContent = new Date(ev.at * 1000).toLocaleTimeString();
+  const cat = document.createElement("span");
+  cat.className = "debug-cat";
+  cat.textContent = ev.category;
+  meta.append(time, cat);
+
+  const summary = document.createElement("div");
+  summary.className = "debug-summary";
+  summary.textContent = ev.summary;
+
+  entry.append(meta, summary);
+  if (ev.detail) {
+    const detail = document.createElement("pre");
+    detail.className = "debug-detail";
+    detail.textContent = ev.detail;
+    entry.append(detail);
+  }
+  debugLogEl.appendChild(entry);
+}
+
+async function refreshDebug() {
+  let data;
+  try {
+    data = await api(`/api/debug/log?after=${debugSeq}`);
+  } catch {
+    return; // debug turned off or server restarted without it; leave panel as-is
+  }
+  if (!data.events.length) return;
+  const nearBottom =
+    debugLogEl.scrollHeight - debugLogEl.scrollTop - debugLogEl.clientHeight < 40;
+  debugLogEl.querySelector(".debug-empty")?.remove();
+  for (const ev of data.events) {
+    appendDebugEntry(ev);
+    debugSeq = Math.max(debugSeq, ev.seq);
+  }
+  if (nearBottom) debugLogEl.scrollTop = debugLogEl.scrollHeight;
+}
+
+function startDebug() {
+  if (debugStarted) return;
+  debugStarted = true;
+  debugPanel.hidden = false;
+  const empty = document.createElement("div");
+  empty.className = "debug-empty";
+  empty.textContent = "Waiting for activity — send a message or run a task.";
+  debugLogEl.appendChild(empty);
+  debugClearBtn.addEventListener("click", () => {
+    debugLogEl.innerHTML = ""; // clears the view only; server keeps its buffer
+  });
+  refreshDebug();
+  setInterval(refreshDebug, 2000);
 }
 
 // ---------- multi-stream live capture: each stream = camera + voice ----------

@@ -38,6 +38,15 @@
     <h3 class="streams-subhead">Live view — every connected stream</h3>
     <div id="stream-gallery" class="stream-gallery"></div>
   </section>
+
+  <section id="debug-panel" class="panel debug-panel" hidden>
+    <div class="debug-head">
+      <h2>Debug log</h2>
+      <span class="hint">Live trace of orchestrator reasoning and memory writes — shown because the server is running in debug mode.</span>
+      <button id="debug-clear" title="Clear the view">Clear</button>
+    </div>
+    <div id="debug-log" class="debug-log"></div>
+  </section>
 </main>
 
 <script src="/static/app.js"></script>

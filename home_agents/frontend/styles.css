@@ -118,6 +118,62 @@ button.deny { background: var(--danger); border-color: var(--danger); color: whi
 .stream-tile-meta { padding: 6px 8px; font-size: 12px; color: var(--text-dim); }
 .stream-tile-meta small { opacity: 0.7; }
 
+/* debug panel: full-width strip below the rest, only rendered in debug mode */
+.debug-panel { grid-column: 1 / -1; }
+.debug-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.debug-head h2 { margin: 0; }
+.debug-head .hint { flex: 1 1 240px; }
+#debug-clear { flex: 0 0 auto; }
+
+.debug-log {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.debug-entry {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-dim);
+  border-radius: 6px;
+  padding: 6px 9px;
+  background: var(--bg);
+}
+.debug-entry.cat-orchestrator { border-left-color: var(--accent); }
+.debug-entry.cat-memory { border-left-color: var(--ok); }
+.debug-entry.cat-agent { border-left-color: var(--warn); }
+
+.debug-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.debug-time { color: var(--text-dim); font-size: 11px; }
+.debug-cat {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--border);
+  color: var(--text-dim);
+}
+.debug-entry.cat-orchestrator .debug-cat { color: var(--accent); }
+.debug-entry.cat-memory .debug-cat { color: var(--ok); }
+.debug-entry.cat-agent .debug-cat { color: var(--warn); }
+
+.debug-summary { color: var(--text); line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+.debug-detail {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+.debug-empty { color: var(--text-dim); }
+
 @media (max-width: 800px) {
   .layout { grid-template-columns: 1fr; }
   .chat-panel { grid-row: auto; }

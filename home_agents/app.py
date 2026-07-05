@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from .agent_runner import TaskAgent
 from .approvals import ApprovalStore
 from .config import get_settings
+from .debug_log import DebugLog
 from .llm_client import LLMClient
 from .memory_store import MemoryStore
 from .orchestrator import Orchestrator
@@ -33,17 +34,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 
 settings = get_settings()
+debug_log = DebugLog(settings.debug)
 llm = LLMClient(settings)
 task_store = TaskStore(settings)
-memory_store = MemoryStore(settings)
+memory_store = MemoryStore(settings, debug_log)
 stream_registry = StreamRegistry(settings)
 if settings.mock_mode:
     # Demo streams exist so the tap scenario works with zero hardware; in live
     # mode real devices push their own streams, so don't seed fake ones.
     stream_registry.seed_demo_streams(REPO_ROOT / "data")
 approval_store = ApprovalStore()
-orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store)
-task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store)
+orchestrator = Orchestrator(llm, task_store, stream_registry, memory_store, debug_log)
+task_agent = TaskAgent(llm, memory_store, stream_registry, approval_store, debug_log)
 latest_results = LatestResults()
 scheduler = Scheduler(task_store, task_agent, latest_results, settings.tick_seconds)
 
@@ -65,7 +67,22 @@ def index() -> FileResponse:
 
 @app.get("/api/status")
 def status() -> dict:
-    return {"mock_mode": settings.mock_mode, "tick_seconds": settings.tick_seconds}
+    return {
+        "mock_mode": settings.mock_mode,
+        "tick_seconds": settings.tick_seconds,
+        "debug": settings.debug,
+    }
+
+
+@app.get("/api/debug/log")
+def debug_events(after: int = 0) -> dict:
+    """Tail of the in-memory debug log (orchestrator decisions + memory writes).
+
+    Only serves data when the app is started with HOME_AGENTS_DEBUG=true;
+    otherwise the debug panel stays hidden and this returns nothing."""
+    if not settings.debug:
+        raise HTTPException(404, "debug mode is off")
+    return {"events": debug_log.recent(after)}
 
 
 # ---------------------------------------------------------------- chat
