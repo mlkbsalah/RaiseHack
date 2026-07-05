@@ -39,11 +39,24 @@ class TaskDraft(SerializableModel):
     title: str
     description: str
     focus: str
-    interval_seconds: int = Field(default=300, ge=15)
+    interval_seconds: int = Field(default=300, ge=1)
     subject_id: str | None = None
     subject_label: str | None = None
     streams: list[StreamRequirement] = Field(default_factory=list)
     requires_approval: bool = True
+
+
+class TaskUpdateDraft(SerializableModel):
+    """A partial update to an existing task."""
+
+    title: str | None = None
+    description: str | None = None
+    focus: str | None = None
+    interval_seconds: int | None = Field(default=None, ge=1)
+    subject_id: str | None = None
+    subject_label: str | None = None
+    streams: list[StreamRequirement] | None = None
+    requires_approval: bool | None = None
 
 
 class TaskSpec(SerializableModel):
@@ -117,5 +130,5 @@ class AgentRunResult(SerializableModel):
 class OrchestratorReply(SerializableModel):
     intent: Intent
     reply: str
-    task: TaskDraft | None = None
+    task: TaskDraft | TaskUpdateDraft | None = None
     target_task_id: str | None = None

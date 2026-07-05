@@ -16,6 +16,19 @@ async function api(path, options) {
   return res.json();
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replaceAll("\n", "&#10;");
+}
+
 function addMessage(role, text) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
@@ -58,17 +71,18 @@ function renderTasks(views) {
     if (approval) tile.classList.add("approval");
 
     const streams = task.streams.map((s) => s.stream_id).join(", ") || "none";
+    const streamLines = task.streams.map((s) => `${s.stream_id} ${s.kind}`).join("\n");
     let html = `
-      <h3>${task.title}</h3>
+      <h3>${escapeHtml(task.title)}</h3>
       <div class="meta">
-        <span class="pill ${task.status}">${task.status}</span>
+        <span class="pill ${task.status}">${escapeHtml(task.status)}</span>
         <span class="pill">every ${task.interval_seconds}s</span>
-        ${task.subject_id ? `<span class="pill">subject: ${task.subject_id}</span>` : ""}
+        ${task.subject_id ? `<span class="pill">subject: ${escapeHtml(task.subject_id)}</span>` : ""}
       </div>
-      <div class="meta">streams: ${streams}</div>
+      <div class="meta">streams: ${escapeHtml(streams)}</div>
     `;
     if (result) {
-      html += `<div class="summary">${result.observation.summary}</div>`;
+      html += `<div class="summary">${escapeHtml(result.observation.summary)}</div>`;
     } else {
       html += `<div class="summary hint">Waiting for the first scheduled run…</div>`;
     }
@@ -76,8 +90,8 @@ function renderTasks(views) {
       html += `
         <div class="approval-box">
           <strong>Needs your approval</strong><br/>
-          Action: ${approval.action}<br/>
-          Reason: ${approval.reason} (${approval.risk} risk)
+          Action: ${escapeHtml(approval.action)}<br/>
+          Reason: ${escapeHtml(approval.reason)} (${escapeHtml(approval.risk)} risk)
           <div class="row" style="margin-top:6px;">
             <button class="approve" data-approve="${approval.approval_id}">Approve</button>
             <button class="deny" data-deny="${approval.approval_id}">Deny</button>
@@ -93,6 +107,39 @@ function renderTasks(views) {
           : `<button data-resume="${task.task_id}">Resume</button>`}
         <button data-delete="${task.task_id}">Delete</button>
       </div>
+      <details class="edit-task">
+        <summary>Edit details</summary>
+        <form data-edit-task="${task.task_id}">
+          <label>
+            Title
+            <input name="title" type="text" value="${escapeAttr(task.title)}" />
+          </label>
+          <label>
+            Description
+            <textarea name="description" rows="2">${escapeHtml(task.description)}</textarea>
+          </label>
+          <label>
+            Focus
+            <textarea name="focus" rows="3">${escapeHtml(task.focus)}</textarea>
+          </label>
+          <label>
+            Check every
+            <input name="interval_seconds" type="number" min="1" step="1" value="${task.interval_seconds}" />
+            <span class="unit">seconds</span>
+          </label>
+          <label>
+            Streams
+            <textarea name="streams" rows="2" placeholder="kitchen-cam image">${escapeHtml(streamLines)}</textarea>
+          </label>
+          <label class="checkline">
+            <input name="requires_approval" type="checkbox" ${task.requires_approval ? "checked" : ""} />
+            Require approval for proposed actions
+          </label>
+          <div class="row">
+            <button class="primary" type="submit">Save</button>
+          </div>
+        </form>
+      </details>
     `;
     tile.innerHTML = html;
     taskGrid.appendChild(tile);
@@ -116,6 +163,52 @@ function renderTasks(views) {
   taskGrid.querySelectorAll("[data-delete]").forEach((btn) =>
     btn.addEventListener("click", () => api(`/api/tasks/${btn.dataset.delete}`, { method: "DELETE" }).then(refreshTasks))
   );
+  taskGrid.querySelectorAll("[data-edit-task]").forEach((form) =>
+    form.addEventListener("submit", (event) => saveTaskEdit(event, form))
+  );
+}
+
+function parseStreams(value) {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [stream_id, kind = stream_id.endsWith("-mic") ? "audio" : "image"] = line.split(/\s+/);
+      if (!["image", "audio"].includes(kind)) {
+        throw new Error(`Stream "${stream_id}" must use kind image or audio`);
+      }
+      return { stream_id, kind };
+    });
+}
+
+async function saveTaskEdit(event, form) {
+  event.preventDefault();
+  const data = new FormData(form);
+  const interval = Number(data.get("interval_seconds"));
+  if (!Number.isInteger(interval) || interval < 1) {
+    addMessage("assistant", "Task interval must be at least 1 second.");
+    return;
+  }
+  let streams;
+  try {
+    streams = parseStreams(String(data.get("streams") || ""));
+  } catch (err) {
+    addMessage("assistant", `Error: ${err.message}`);
+    return;
+  }
+  await api(`/api/tasks/${form.dataset.editTask}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      title: String(data.get("title") || "").trim() || "Untitled task",
+      description: String(data.get("description") || "").trim(),
+      focus: String(data.get("focus") || "").trim(),
+      interval_seconds: interval,
+      streams,
+      requires_approval: data.has("requires_approval"),
+    }),
+  });
+  refreshTasks();
 }
 
 async function decide(approvalId, approve) {

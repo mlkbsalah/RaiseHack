@@ -13,7 +13,7 @@ import json
 
 from .llm_client import LLMClient, schema_instruction, validate_json
 from .memory_store import MemoryStore
-from .models import OrchestratorReply, StreamRequirement, TaskDraft, TaskSpec
+from .models import OrchestratorReply, StreamRequirement, TaskDraft, TaskSpec, TaskUpdateDraft
 from .stream_registry import StreamRegistry
 from .task_store import TaskStore
 
@@ -25,20 +25,23 @@ _REPLY_SCHEMA = {
     "reply": "short conversational string shown to the user immediately",
     "task": (
         "null unless intent is create_task or update_task, else an object: "
-        "{title, description, focus (what the agent should look for each run), "
-        "interval_seconds (integer >= 15), "
+        "For create_task, include all fields: {title, description, focus "
+        "(what the agent should look for each run), interval_seconds "
+        "(integer >= 1), "
         "subject_id (an id from context.known_subjects, or null), "
         "subject_label (human name for a brand-new subject, or null), "
         "streams (array of {stream_id, kind: image|audio}, prefer ids from "
         "context.known_streams; each place in context.known_stream_pairs "
         "exposes a camera '<name>-cam' (image) and a microphone '<name>-mic' "
         "(audio) — include BOTH when a task should watch and listen to that "
-        "place), requires_approval (bool, default true)}"
+        "place), requires_approval (bool, default true)}. "
+        "For update_task, include only the fields the user wants changed."
     ),
     "target_task_id": (
         "null unless intent is update_task/pause_task/resume_task/delete_task, "
         "else the task_id or title text of the task to target, taken from "
-        "context.existing_tasks"
+        "context.existing_tasks. If the user says 'that task', 'it', or asks "
+        "for a detail change after creating a task, use context.most_recent_task."
     ),
 }
 
@@ -65,11 +68,27 @@ class Orchestrator:
         return self._apply(reply)
 
     def _build_context(self) -> dict:
+        tasks = self.task_store.list()
+        most_recent = max(tasks, key=lambda t: t.updated_at, default=None)
         return {
             "existing_tasks": [
-                {"task_id": t.task_id, "title": t.title, "status": t.status}
-                for t in self.task_store.list()
+                {
+                    "task_id": t.task_id,
+                    "title": t.title,
+                    "status": t.status,
+                    "description": t.description,
+                    "focus": t.focus,
+                    "interval_seconds": t.interval_seconds,
+                    "streams": [s.as_dict() for s in t.streams],
+                    "updated_at": t.updated_at,
+                }
+                for t in tasks
             ],
+            "most_recent_task": (
+                {"task_id": most_recent.task_id, "title": most_recent.title}
+                if most_recent
+                else None
+            ),
             "known_streams": self.stream_registry.list_streams(),
             "known_stream_pairs": self.stream_registry.list_pairs(),
             "known_subjects": self.memory_store.list_subjects(),
@@ -97,6 +116,8 @@ class Orchestrator:
     def _apply(self, reply: OrchestratorReply) -> str:
         if reply.intent == "create_task" and reply.task is not None:
             return self._create_task(reply)
+        if reply.intent == "update_task":
+            return self._update_task(reply)
         if reply.intent in {"pause_task", "resume_task", "delete_task"} and reply.target_task_id:
             return self._change_task_status(reply)
         if reply.intent == "list_tasks":
@@ -107,7 +128,8 @@ class Orchestrator:
 
     def _create_task(self, reply: OrchestratorReply) -> str:
         draft = reply.task
-        assert draft is not None
+        if not isinstance(draft, TaskDraft):
+            return "I couldn't create that task because some required details were missing."
         subject_id = None
         if draft.subject_id or draft.subject_label:
             label = draft.subject_label or draft.subject_id or "subject"
@@ -119,8 +141,29 @@ class Orchestrator:
         note = f" Still waiting on stream(s): {', '.join(missing)}." if missing else ""
         return f"{reply.reply}{note}"
 
+    def _update_task(self, reply: OrchestratorReply) -> str:
+        task = self._resolve_target(reply.target_task_id)
+        if task is None:
+            return f"{reply.reply} (I couldn't find which task to update.)"
+        if reply.task is None:
+            return f"{reply.reply} (Tell me which details to change.)"
+        update = (
+            reply.task
+            if isinstance(reply.task, TaskUpdateDraft)
+            else TaskUpdateDraft(**reply.task.model_dump(exclude_unset=True))
+        )
+        if update.subject_id or update.subject_label:
+            label = update.subject_label or update.subject_id or "subject"
+            update = update.model_copy(
+                update={"subject_id": self.memory_store.resolve_subject_id(label, update.subject_id)}
+            )
+        updated = self.task_store.patch(task.task_id, update)
+        if updated is None:
+            return f"{reply.reply} (I couldn't update that task.)"
+        return reply.reply
+
     def _change_task_status(self, reply: OrchestratorReply) -> str:
-        task = self.task_store.find_by_title(reply.target_task_id or "")
+        task = self._resolve_target(reply.target_task_id)
         if task is None:
             return f"{reply.reply} (I couldn't find a task matching '{reply.target_task_id}'.)"
         if reply.intent == "pause_task":
@@ -130,6 +173,16 @@ class Orchestrator:
         else:
             self.task_store.delete(task.task_id)
         return reply.reply
+
+    def _resolve_target(self, target: str | None) -> TaskSpec | None:
+        if target:
+            task = self.task_store.find_by_title(target)
+            if task is not None:
+                return task
+        tasks = self.task_store.list()
+        if len(tasks) == 1:
+            return tasks[0]
+        return max(tasks, key=lambda t: t.updated_at, default=None)
 
     def _list_tasks(self, prefix: str) -> str:
         tasks = self.task_store.list()
@@ -172,6 +225,19 @@ class Orchestrator:
                 return OrchestratorReply(
                     intent="delete_task", reply=f"Deleting '{target}'.", target_task_id=target
                 )
+        if any(k in text for k in ("every", "seconds", "minutes", "interval", "rename", "change", "update")):
+            target = self._mock_find_target(text) or self._mock_recent_target()
+            if target:
+                interval = self._mock_interval_seconds(text)
+                update = TaskUpdateDraft(interval_seconds=interval) if interval else TaskUpdateDraft()
+                if "rename" in text:
+                    update.title = message.split("rename", 1)[-1].strip(" .") or None
+                return OrchestratorReply(
+                    intent="update_task",
+                    reply=f"Updated '{target}'.",
+                    task=update,
+                    target_task_id=target,
+                )
         draft = self._mock_draft(message)
         return OrchestratorReply(
             intent="create_task",
@@ -185,6 +251,20 @@ class Orchestrator:
             if task.title.lower() in text:
                 return task.title
         return None
+
+    def _mock_recent_target(self) -> str | None:
+        task = max(self.task_store.list(), key=lambda t: t.updated_at, default=None)
+        return task.title if task else None
+
+    def _mock_interval_seconds(self, text: str) -> int | None:
+        import re
+
+        match = re.search(r"every\s+(\d+)\s*(second|seconds|sec|secs|minute|minutes|min|mins)?", text)
+        if not match:
+            return None
+        value = int(match.group(1))
+        unit = match.group(2) or "seconds"
+        return value * 60 if unit.startswith(("minute", "min")) else value
 
     def _mock_draft(self, message: str) -> TaskDraft:
         text = message.lower()

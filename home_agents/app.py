@@ -24,6 +24,7 @@ from .approvals import ApprovalStore
 from .config import get_settings
 from .llm_client import LLMClient
 from .memory_store import MemoryStore
+from .models import TaskUpdateDraft
 from .orchestrator import Orchestrator
 from .scheduler import LatestResults, Scheduler
 from .stream_registry import StreamRegistry
@@ -137,6 +138,19 @@ def run_task_now(task_id: str) -> dict:
     if result is None:
         raise HTTPException(404, "task not found")
     return _task_view(task_store.get(task_id))
+
+
+@app.patch("/api/tasks/{task_id}")
+def update_task(task_id: str, update: TaskUpdateDraft) -> dict:
+    if update.subject_id or update.subject_label:
+        label = update.subject_label or update.subject_id or "subject"
+        update = update.model_copy(
+            update={"subject_id": memory_store.resolve_subject_id(label, update.subject_id)}
+        )
+    task = task_store.patch(task_id, update)
+    if task is None:
+        raise HTTPException(404, "task not found")
+    return _task_view(task)
 
 
 @app.delete("/api/tasks/{task_id}")
