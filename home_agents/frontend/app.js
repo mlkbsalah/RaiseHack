@@ -341,13 +341,16 @@ async function refreshStatus() {
 async function refreshGoogleStatus() {
   const status = await api("/api/google/status");
   googleConnectBtn.disabled = false;
+  googleStatusEl.classList.toggle("connected", Boolean(status.connected));
   if (!status.configured) {
+    googleConnectBtn.textContent = status.account_email ? "Finish setup" : "Add Gmail";
     googleStatusEl.textContent =
       status.account_email
         ? `Gmail saved: ${status.account_email}. OAuth client setup is still needed before real actions can run.`
         : "Start by adding your Gmail address. OAuth client setup is needed before real actions can run.";
     return;
   }
+  googleConnectBtn.textContent = status.connected ? "Reconnect Google" : "Connect Google";
   googleStatusEl.textContent = status.connected
     ? `Google connected${status.account_email ? ` for ${status.account_email}` : ""}. Approved structured actions can execute.`
     : status.account_email

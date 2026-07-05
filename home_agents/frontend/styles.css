@@ -130,6 +130,10 @@ button.deny { background: var(--danger); border-color: var(--danger); color: whi
 
 .stream-controls { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
 .google-status { margin-bottom: 10px; }
+.google-status.connected {
+  color: var(--ok);
+  font-weight: 600;
+}
 .stream-controls input { padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); width: 200px; }
 
 .stream-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin-bottom: 12px; }
