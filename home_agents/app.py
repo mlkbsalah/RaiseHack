@@ -222,7 +222,10 @@ def upload_image(stream_id: str, upload: ImageUpload) -> dict:
         data = base64.b64decode(encoded)
     except (ValueError, IndexError) as exc:
         raise HTTPException(400, f"invalid data url: {exc}") from exc
-    stream_registry.put(stream_id, "image", mime_type, data)
+    try:
+        stream_registry.put(stream_id, "image", mime_type, data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {"stream_id": stream_id, "kind": "image", "bytes": len(data)}
 
 
@@ -230,7 +233,10 @@ def upload_image(stream_id: str, upload: ImageUpload) -> dict:
 async def upload_audio(stream_id: str, file: UploadFile) -> dict:
     data = await file.read()
     mime_type = file.content_type or "audio/webm"
-    stream_registry.put(stream_id, "audio", mime_type, data)
+    try:
+        stream_registry.put(stream_id, "audio", mime_type, data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {"stream_id": stream_id, "kind": "audio", "bytes": len(data)}
 
 
